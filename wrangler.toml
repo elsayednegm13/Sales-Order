@@ -1,0 +1,27 @@
+name = "sales-order-system"
+main = "src/worker/index.ts"
+workers_dev = true
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[placement]
+mode = "smart"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sales-order-db"
+database_id = "cb2b294f-0fb0-45cc-80f9-abdeffb1d288"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "sales-order-branding"
+
+[vars]
+APP_ENV = "production"

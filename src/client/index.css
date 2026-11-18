@@ -1,0 +1,416 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Cairo', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+@layer base {
+  :root {
+    --surface-canvas: #f8fafc;
+    --surface-sidebar: #f1f5f9;
+    --surface-card: #ffffff;
+    --surface-elevated: #ffffff;
+    --border-subtle: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --ink-primary: #0f172a;
+    --ink-secondary: #475569;
+    --ink-muted: #64748b;
+    color-scheme: light;
+  }
+
+  .dark {
+    --surface-canvas: #090d16;
+    --surface-sidebar: #0d1321;
+    --surface-card: #111827;
+    --surface-elevated: #172033;
+    --border-subtle: rgba(148, 163, 184, 0.14);
+    --border-strong: rgba(148, 163, 184, 0.26);
+    --ink-primary: #f8fafc;
+    --ink-secondary: #94a3b8;
+    --ink-muted: #64748b;
+    color-scheme: dark;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    direction: rtl;
+    background-color: var(--surface-canvas);
+    color: var(--ink-primary);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--surface-canvas);
+    color: var(--ink-primary);
+    font-feature-settings: "kern" 1;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+  }
+
+  .dark :focus-visible {
+    outline-color: #60a5fa;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: #e2e8f0;
+}
+
+.dark .skeleton-shimmer {
+  background: #1e293b;
+}
+
+.skeleton-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.62), transparent);
+  animation: skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+.dark .skeleton-shimmer::after {
+  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.22), transparent);
+}
+
+@keyframes skeleton-shimmer {
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+/* ==========================================================================
+   Telegram-Style Circular Ripple View Transition
+   ========================================================================== */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+  display: block;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 9999;
+}
+
+/* Freeze component CSS transitions while ViewTransition snapshots old & new DOM */
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+  transition: none !important;
+}
+
+/* ==========================================================================
+   Refined Scrollbars & Print / PDF View Support
+   ========================================================================== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.28);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.45);
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #root {
+    display: block !important;
+  }
+
+  body:has(.order-print) #root {
+    display: none !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .report-print {
+    display: block !important;
+  }
+
+  .order-print {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: #ffffff !important;
+  }
+
+  .order-print table {
+    width: 100% !important;
+    max-width: 194mm;
+    table-layout: fixed !important;
+  }
+
+  .order-print col.c-serial {
+    width: 22px !important;
+  }
+
+  .order-print col.c-trucks {
+    width: 42px !important;
+  }
+
+  .order-print col.c-pack {
+    width: 32px !important;
+  }
+
+  .order-print col.c-cartons {
+    width: 38px !important;
+  }
+
+  .order-print col.c-pieces {
+    width: 40px !important;
+  }
+
+  .order-print col.c-blank {
+    width: 32px !important;
+  }
+
+  .order-print col.c-party {
+    width: 75px !important;
+  }
+
+  .order-print .print-phone {
+    white-space: nowrap !important;
+    direction: ltr !important;
+    display: inline-block !important;
+    font-size: 9px !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+  }
+
+  .order-print th.th-trucks {
+    width: 42px !important;
+    font-size: 8.5px !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    line-height: 1.15;
+    padding: 2px 1px !important;
+  }
+
+  .order-print th {
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    hyphens: none;
+  }
+
+  .order-print thead {
+    display: table-header-group;
+  }
+
+  .order-print .client-order-block,
+  .order-print .print-signs {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+.report-print {
+  display: none;
+  direction: rtl;
+  color: #000;
+  background: #fff;
+  font-family: 'Cairo', Tahoma, sans-serif;
+}
+
+.report-print-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.report-print h1 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  text-align: center;
+}
+
+.report-print table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.report-print th,
+.report-print td {
+  border: 1px solid #000;
+  padding: 4px 6px;
+  font-size: 11px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.order-print {
+  display: none;
+  direction: rtl;
+  color: #000;
+  background: #fff;
+  font-family: 'Cairo', sans-serif;
+}
+
+.order-print-banner {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  border: 1px solid #000;
+  padding: 6px 12px;
+  font-size: 16px;
+}
+
+.order-print table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.order-print th,
+.order-print td {
+  border: 1px solid #000;
+  padding: 3px 4px;
+  font-size: 10px;
+  text-align: center;
+  vertical-align: middle;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+
+.order-print .print-phone {
+  white-space: nowrap;
+  direction: ltr;
+  display: inline-block;
+  font-size: 9px;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.order-print th.th-trucks {
+  width: 42px;
+  font-size: 8.5px;
+  word-break: normal;
+  overflow-wrap: normal;
+  line-height: 1.15;
+  padding: 2px 1px;
+}
+
+.order-print .spacer-row td {
+  height: 12px;
+  border: none;
+  padding: 0;
+  background: #fff;
+}
+
+.order-print th {
+  font-weight: 700;
+  background: #fff;
+}
+
+.order-print-signs {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  margin-top: 0;
+  border: 1px solid #000;
+  border-top: 0;
+}
+
+.order-print-signs div {
+  padding: 14px 8px 28px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.order-print-signs div+div {
+  border-right: 1px solid #000;
+}
+
+.analytics-print {
+  display: none;
+  direction: rtl;
+  color: #000;
+  background: #fff;
+  font-family: 'Cairo', Tahoma, sans-serif;
+}
+
+.analytics-print-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.analytics-print h1,
+.analytics-print h2 {
+  margin: 12px 0 6px;
+  text-align: center;
+}
+
+.analytics-print table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 12px;
+}
+
+.analytics-print th,
+.analytics-print td {
+  border: 1px solid #000;
+  padding: 4px 6px;
+  font-size: 11px;
+  text-align: center;
+}
+
+@media print {
+  .analytics-print {
+    display: block !important;
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "sales-order-platform",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Enterprise Order, Catalog & Reporting System on Cloudflare Workers, D1, R2, Hono & React 19",
+  "scripts": {
+    "dev:client": "vite",
+    "dev:worker": "wrangler dev --port 8787",
+    "build": "tsc -b && vite build",
+    "preview": "npm run build && wrangler dev --port 8787",
+    "deploy": "npm run typecheck && npm run build && npx wrangler deploy",
+    "typecheck": "tsc -b --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply sales-order-db --local",
+    "db:migrate:remote": "npx wrangler d1 migrations apply sales-order-db --remote",
+    "db:seed:production": "node scripts/seed-production-admin.mjs",
+    "db:backup:production": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backup-prod-db.ps1"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.40.0",
+    "exceljs": "^4.4.0",
+    "hono": "^4.7.4",
+    "lucide-react": "^0.477.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.3.0",
+    "xlsx": "^0.18.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261113.1",
+    "@tailwindcss/vite": "^4.0.14",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "drizzle-kit": "^0.30.5",
+    "tailwindcss": "^4.0.14",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2",
+    "wrangler": "^4.4.0"
+  }
+}
