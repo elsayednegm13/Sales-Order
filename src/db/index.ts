@@ -19,13 +19,19 @@ let isBootstrappedInIsolate = false;
  */
 export async function ensureSystemBootstrapped(
   db: AppDatabase,
-  env: { APP_ENV?: string; ALLOW_DEV_SEED?: string }
+  env: { APP_ENV?: string; ALLOW_DEV_SEED?: string; DEV_SEED_ADMIN_PASSWORD?: string }
 ): Promise<void> {
   if (isBootstrappedInIsolate) {
     return;
   }
   isBootstrappedInIsolate = true;
   if (env.APP_ENV === 'production' || env.ALLOW_DEV_SEED !== 'true') {
+    return;
+  }
+
+  const seedPassword = env.DEV_SEED_ADMIN_PASSWORD?.trim() ?? '';
+  if (!seedPassword) {
+    console.warn('[dev-seed] DEV_SEED_ADMIN_PASSWORD is missing; admin bootstrap was skipped');
     return;
   }
 
@@ -59,7 +65,7 @@ export async function ensureSystemBootstrapped(
     .get();
 
   if (!userCountRow || userCountRow.total === 0) {
-    const defaultPasswordHash = await hashPassword('admin123');
+    const defaultPasswordHash = await hashPassword(seedPassword);
     await db
       .insert(schema.users)
       .values({

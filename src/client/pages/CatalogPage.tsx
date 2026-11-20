@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Edit3,
   FileSpreadsheet,
@@ -60,7 +60,8 @@ export function CatalogPage() {
   const { user } = useAuth();
   const { notify } = useToast();
   const canManage = Boolean(user?.role === 'admin' || user?.permissions.catalog.manage);
-  const canDelete = user?.role === 'admin';
+  const canBulkImport = Boolean(user?.role === 'admin' || user?.permissions.catalog.bulkImport);
+  const canDelete = Boolean(user?.role === 'admin' || user?.permissions.catalog.delete);
   const canExport = Boolean(user?.role === 'admin' || user?.permissions.reports.exportExcel);
   const canPrint = Boolean(user?.role === 'admin' || user?.permissions.reports.exportPdf);
   const { isExporting, runExport } = useExcelExport();
@@ -79,6 +80,7 @@ export function CatalogPage() {
   const [form, setForm] = useState<ProductForm>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -146,7 +148,7 @@ export function CatalogPage() {
 
   const submitForm = async (event: FormEvent) => {
     event.preventDefault();
-    if (isSaving) return;
+    if (savingRef.current) return;
     const packed = requiresPacking(form.itemType);
     const packing = packed ? Number(form.packingCapacity) : 0;
     if (!form.code.trim()) {
@@ -163,6 +165,7 @@ export function CatalogPage() {
     }
 
     setFormError(null);
+    savingRef.current = true;
     setIsSaving(true);
     const payload = {
       code: form.code.trim(),
@@ -191,6 +194,7 @@ export function CatalogPage() {
     } catch (err) {
       setFormError(err instanceof ApiClientError ? err.message : 'تعذر حفظ الصنف');
     } finally {
+      savingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -282,9 +286,9 @@ export function CatalogPage() {
             />
           </div>
           <div className="inline-flex shrink-0 flex-nowrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 dark:border-slate-700 dark:bg-slate-950">
-            <button type="button" onClick={() => setItemType('')} className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-bold ${itemType === '' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-800'}`}>الكل</button>
+            <button type="button" onClick={() => setItemType('')} className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-bold ${itemType === '' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'}`}>الكل</button>
             {ITEM_TYPES.map((type) => (
-              <button key={type} type="button" onClick={() => setItemType(type)} className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-bold ${itemType === type ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-800'}`}>{ITEM_TYPE_LABELS_AR[type]}</button>
+              <button key={type} type="button" onClick={() => setItemType(type)} className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-bold ${itemType === type ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'}`}>{ITEM_TYPE_LABELS_AR[type]}</button>
             ))}
           </div>
           <select
@@ -335,11 +339,11 @@ export function CatalogPage() {
               إضافة صنف
             </button>
           )}
-          {canManage && (
+          {canBulkImport && (
             <button
               type="button"
               onClick={() => setImportOpen(true)}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white"
             >
               <FileSpreadsheet className="h-4 w-4 text-blue-600" />
               استيراد Excel
@@ -350,7 +354,7 @@ export function CatalogPage() {
               type="button"
               onClick={exportExcel}
               disabled={filtered.length === 0 || isExporting}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-emerald-300 dark:hover:border-emerald-600 dark:hover:bg-emerald-950 dark:hover:text-emerald-100"
             >
               <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
               تصدير Excel
@@ -361,7 +365,7 @@ export function CatalogPage() {
               type="button"
               onClick={triggerPrintPdfView}
               disabled={filtered.length === 0}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white"
             >
               <Printer className="h-4 w-4" />
               طباعة
@@ -391,7 +395,7 @@ export function CatalogPage() {
                       <form onSubmit={submitForm} className="rounded-lg border border-slate-200 border-r-4 border-r-blue-600 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
                         <div className="mb-3 flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
                           <h2 className="text-sm font-bold text-slate-900 dark:text-white">تعديل {product.name}</h2>
-                          <button type="button" onClick={() => { setModalOpen(false); setEditing(null); }} aria-label="إغلاق" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">✕</button>
+                          <button type="button" onClick={() => { setModalOpen(false); setEditing(null); }} aria-label="إغلاق" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white">✕</button>
                         </div>
                         {formError && <p role="alert" className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:bg-red-950/40 dark:text-red-300">{formError}</p>}
                         <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
@@ -405,7 +409,7 @@ export function CatalogPage() {
                         </div>
                         <label className="mt-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">الصنف نشط<input type="checkbox" checked={form.isActive} onChange={(event) => setForm((prev) => ({ ...prev, isActive: event.target.checked }))} className="h-4 w-4 accent-blue-600" /></label>
                         <div className="mt-3 flex justify-end gap-2 border-t border-slate-200 pt-3 dark:border-slate-800">
-                          <button type="button" onClick={() => { setModalOpen(false); setEditing(null); }} className="h-9 rounded-lg border border-slate-300 px-3 text-xs font-bold dark:border-slate-700">إلغاء</button>
+                          <button type="button" onClick={() => { setModalOpen(false); setEditing(null); }} className="h-9 rounded-lg border border-slate-300 px-3 text-xs font-bold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إلغاء</button>
                           <button type="submit" disabled={isSaving} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-bold text-white disabled:opacity-60">{isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}حفظ التعديل</button>
                         </div>
                       </form>
@@ -426,21 +430,25 @@ export function CatalogPage() {
                       <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${product.isActive ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200' : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200'}`}>{product.isActive ? 'نشط' : 'موقوف'}</span>
                     </div>
                     <div className="col-span-12 flex justify-end sm:col-span-2">
-                      {canManage && (
+                      {(canManage || canDelete) && (
                         <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-950">
-                          <button type="button" onClick={() => openEdit(product)} title="تعديل" aria-label="تعديل" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">
+                          {canManage && (
+                          <button type="button" onClick={() => openEdit(product)} title="تعديل" aria-label="تعديل" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
-                          <button type="button" disabled={busyId === product.id} onClick={() => void toggleActive(product)} className="px-2 text-[11px] font-bold text-slate-600 disabled:opacity-50 dark:text-slate-300">
+                          )}
+                          {canManage && (
+                          <button type="button" disabled={busyId === product.id} onClick={() => void toggleActive(product)} className="px-2 text-[11px] font-bold text-slate-600 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white">
                             {product.isActive ? 'إيقاف' : 'تفعيل'}
                           </button>
+                          )}
                           {canDelete && (confirmDeleteId === product.id ? (
                             <span className="inline-flex items-center gap-1 px-1">
                               <button type="button" onClick={() => void removeProduct(product)} className="rounded bg-red-600 px-1.5 py-0.5 text-[11px] font-bold text-white">تأكيد</button>
                               <button type="button" onClick={() => setConfirmDeleteId(null)} className="text-[11px] font-semibold text-slate-500">إلغاء</button>
                             </span>
                           ) : (
-                            <button type="button" onClick={() => setConfirmDeleteId(product.id)} title="حذف" aria-label={`حذف ${product.name}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40">
+                            <button type="button" onClick={() => setConfirmDeleteId(product.id)} title="حذف" aria-label={`حذف ${product.name}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/70 dark:hover:text-red-200">
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           ))}
@@ -473,7 +481,7 @@ export function CatalogPage() {
                   الوزن مرجع للرد على العميل ولا يدخل في حساب الكراتين أو القطع.
                 </p>
               </div>
-              <button type="button" onClick={() => setModalOpen(false)} aria-label="إغلاق" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+              <button type="button" onClick={() => setModalOpen(false)} aria-label="إغلاق" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 dark:hover:text-white">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -535,7 +543,7 @@ export function CatalogPage() {
               <input type="checkbox" checked={form.isActive} onChange={(event) => setForm((prev) => ({ ...prev, isActive: event.target.checked }))} className="h-4 w-4 accent-blue-600" />
             </label>
             <div className="mt-5 flex justify-end gap-2.5">
-              <button type="button" onClick={() => setModalOpen(false)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200">
+              <button type="button" onClick={() => setModalOpen(false)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">
                 إلغاء
               </button>
               <button type="submit" disabled={isSaving} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60">

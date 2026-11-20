@@ -17,16 +17,30 @@ const CustomersPage = lazy(() => import('@/client/pages/CustomersPage').then((mo
 const DailySheetsPage = lazy(() => import('@/client/pages/DailySheetsPage').then((module) => ({ default: module.DailySheetsPage })));
 const DailySheetDetailPage = lazy(() => import('@/client/pages/DailySheetDetailPage').then((module) => ({ default: module.DailySheetDetailPage })));
 const ReportsPage = lazy(() => import('@/client/pages/ReportsPage').then((module) => ({ default: module.ReportsPage })));
+const AuditLogPage = lazy(() => import('@/client/pages/AuditLogPage').then((module) => ({ default: module.AuditLogPage })));
 
 function PageFallback() {
   return <SkeletonCard count={4} />;
 }
 
+function firstAllowedPath(user: NonNullable<ReturnType<typeof useAuth>['user']>): string | null {
+  const allow = (section: 'dailySheets' | 'catalog' | 'customers' | 'reports') =>
+    user.role === 'admin' || Boolean(user.permissions[section].view);
+  if (allow('dailySheets')) return '/';
+  if (allow('catalog')) return '/catalog';
+  if (allow('customers')) return '/customers';
+  if (allow('reports')) return '/reports';
+  if (user.role === 'admin') return '/users';
+  return null;
+}
+
 function GuardedDashboard() {
   const { user } = useAuth();
   const allowed = user?.role === 'admin' || Boolean(user?.permissions.dailySheets.view);
-  if (!allowed) {
-    return <p className="py-16 text-center text-sm text-slate-500">لا تملك صلاحية عرض لوحة التحكم.</p>;
+  if (!user || !allowed) {
+    const next = user ? firstAllowedPath(user) : null;
+    if (next && next !== '/') return <Navigate to={next} replace />;
+    return <p className="py-16 text-center text-sm text-slate-500">لا توجد صفحة متاحة لهذا الحساب.</p>;
   }
   return <DashboardPage />;
 }
@@ -49,8 +63,10 @@ function ViewRoute({
   const { user } = useAuth();
   const allowed =
     user?.role === 'admin' || Boolean(user?.permissions[section].view);
-  if (!allowed) {
-    return <Navigate to="/" replace />;
+  if (!user || !allowed) {
+    const next = user ? firstAllowedPath(user) : '/';
+    if (!next) return <p className="py-16 text-center text-sm text-slate-500">لا توجد صفحة متاحة لهذا الحساب.</p>;
+    return <Navigate to={next} replace />;
   }
   return <>{children}</>;
 }
@@ -135,6 +151,14 @@ function AppRoutes() {
           element={
             <AdminRoute>
               <SettingsPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/audit-log"
+          element={
+            <AdminRoute>
+              <AuditLogPage />
             </AdminRoute>
           }
         />

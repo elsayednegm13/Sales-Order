@@ -73,7 +73,11 @@ export function BrandingProvider({ children }: { children: React.ReactNode }) {
   const refreshSettings = useCallback(async () => {
     try {
       const fetched = await api.settings.get();
-      applySettings(fetched.settings);
+      applySettings({
+        ...DEFAULT_SETTINGS,
+        ...fetched.settings,
+        startingOrderNumber: fetched.settings.startingOrderNumber ?? DEFAULT_SETTINGS.startingOrderNumber,
+      });
     } catch {
       applyDomBranding(DEFAULT_SETTINGS);
     } finally {

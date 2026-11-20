@@ -5,6 +5,8 @@ import type { SubMerchantDTO } from '@/shared/types';
 import type { AppContextEnv } from '@/worker/types';
 import { requireAuth, requirePermission } from '@/worker/middleware/auth';
 import { bumpCacheVersions, CACHE_NAMESPACES } from '@/worker/cache';
+import { recordAuditLog } from '@/worker/services/auditLog';
+import { clientIp } from '@/worker/utils/loginRateLimit';
 import { createSubMerchantSchema, readJson, updateSubMerchantSchema } from '@/worker/schemas';
 
 export const subMerchantsRoutes = new Hono<AppContextEnv>();
@@ -133,14 +135,14 @@ subMerchantsRoutes.put('/:id', requirePermission('customers', 'manage'), async (
   return c.json({ subMerchant: mapSubMerchant(updated) });
 });
 
-subMerchantsRoutes.delete('/:id', requirePermission('customers', 'manage'), async (c) => {
+subMerchantsRoutes.delete('/:id', requirePermission('customers', 'deleteSubMerchant'), async (c) => {
   const id = Number.parseInt(c.req.param('id'), 10);
   if (!Number.isFinite(id)) {
     return c.json({ error: 'معرّف التاجر غير صالح' }, 400);
   }
 
   const db = c.get('db');
-  const existing = await db.select({ id: subMerchants.id }).from(subMerchants).where(eq(subMerchants.id, id)).get();
+  const existing = await db.select({ id: subMerchants.id, name: subMerchants.name }).from(subMerchants).where(eq(subMerchants.id, id)).get();
   if (!existing) {
     return c.json({ error: 'التاجر غير موجود' }, 404);
   }
@@ -162,6 +164,19 @@ subMerchantsRoutes.delete('/:id', requirePermission('customers', 'manage'), asyn
   }
 
   await db.delete(subMerchants).where(eq(subMerchants.id, id));
+  const user = c.get('user');
+  await recordAuditLog(db, {
+    actorUserId: user.id,
+    actorUsername: user.username,
+    actorFullName: user.fullName,
+    module: 'customers',
+    action: 'delete_sub_merchant',
+    entityType: 'subMerchant',
+    entityId: id,
+    entityLabel: existing.name,
+    summary: `حذف التاجر الفرعي ${existing.name}`,
+    ipAddress: clientIp((name) => c.req.header(name)),
+  });
   await bumpCacheVersions(c.get('db'), [CACHE_NAMESPACES.customers, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
   return c.json({ ok: true, deletedId: id });
 });

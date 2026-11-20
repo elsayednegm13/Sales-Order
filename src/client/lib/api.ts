@@ -7,6 +7,8 @@ import type {
   CreateSubMerchantDTO,
   CreateUserDTO,
   CustomerDTO,
+  FulfillmentReportDTO,
+  FulfillmentStatus,
   DailySheetDetailDTO,
   DailySheetListItemDTO,
   DashboardStatsDTO,
@@ -30,6 +32,7 @@ import type {
   UserDTO,
 } from '@/shared/types';
 import { cachedQuery, invalidateQueries } from '@/client/lib/queryCache';
+import type { AuditLogResponse } from '@/shared/auditLog';
 
 function forgetLegacyToken(): void {
   try {
@@ -92,6 +95,14 @@ async function requestJson<T>(
 
     if (!response.ok) {
       const errPayload = payload as ApiErrorResponse | null;
+      if (
+        response.status === 401
+        && path !== '/api/auth/login'
+        && path !== '/api/auth/me'
+        && errPayload?.code !== 'INVALID_CURRENT_PASSWORD'
+      ) {
+        window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+      }
       throw new ApiClientError(
         errPayload?.error || 'تعذر إتمام العملية، يرجى المحاولة مرة أخرى',
         response.status,
@@ -133,6 +144,25 @@ export const api = {
 
     async me(force = false): Promise<{ user: UserDTO; nextSheetNumber: string }> {
       return cachedQuery('auth:me', () => requestJson<{ user: UserDTO; nextSheetNumber: string }>('/api/auth/me'), force);
+    },
+
+    async requestPasswordReset(username: string): Promise<{ message: string }> {
+      return requestJson<{ message: string }>('/api/auth/password-reset/request', {
+        method: 'POST',
+        body: JSON.stringify({ username }),
+      });
+    },
+
+    async confirmPasswordReset(data: {
+      mode: 'employee' | 'admin_recovery';
+      username: string;
+      code: string;
+      newPassword: string;
+    }): Promise<{ ok: boolean; message: string }> {
+      return requestJson<{ ok: boolean; message: string }>('/api/auth/password-reset/confirm', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
     },
   },
 
@@ -188,6 +218,29 @@ export const api = {
     async remove(id: number): Promise<{ ok: boolean; deletedId: number }> {
       return requestJson<{ ok: boolean; deletedId: number }>(`/api/users/${id}`, {
         method: 'DELETE',
+      });
+    },
+
+    async resetRequests(): Promise<{ requests: Array<{ userId: number; status: string; requestedAt: number; expiresAt: number | null }> }> {
+      return requestJson('/api/users/reset-requests');
+    },
+
+    async issueResetCode(id: number): Promise<{ code: string; expiresAt: number; expiresInMinutes: number; username: string; fullName: string }> {
+      return requestJson(`/api/users/${id}/reset-code`, { method: 'POST' });
+    },
+
+    async revokeResetCode(id: number): Promise<{ ok: boolean }> {
+      return requestJson(`/api/users/${id}/reset-code`, { method: 'DELETE' });
+    },
+
+    async recoveryStatus(): Promise<{ totalCount: number; remainingCount: number; usedCount: number; generatedAt: number | null }> {
+      return requestJson('/api/users/recovery-codes');
+    },
+
+    async regenerateRecoveryCodes(currentPassword: string): Promise<{ codes: string[]; totalCount: number; remainingCount: number; generatedAt: number }> {
+      return requestJson('/api/users/recovery-codes', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword }),
       });
     },
   },
@@ -354,6 +407,7 @@ export const api = {
       productId?: string;
       deliveryType?: 'all' | 'warehouse' | 'sub_merchant';
       status?: 'all' | 'open' | 'closed';
+      fulfillment?: 'all' | 'dispatched' | 'pending';
     }): Promise<{ report: SalesReportDTO }> {
       return cachedQuery(`reports:${JSON.stringify(params)}`, () =>
         requestJson(withQuery('/api/reports', {
@@ -367,7 +421,28 @@ export const api = {
           productId: params.productId,
           deliveryType: params.deliveryType && params.deliveryType !== 'all' ? params.deliveryType : undefined,
           status: params.status && params.status !== 'all' ? params.status : undefined,
+          fulfillment: params.fulfillment && params.fulfillment !== 'all' ? params.fulfillment : undefined,
         }))
+      );
+    },
+
+    async fulfillment(params: {
+      dateFrom?: string;
+      dateTo?: string;
+      status?: 'all' | FulfillmentStatus;
+      customerId?: string;
+      page?: number;
+      pageSize?: number;
+    }): Promise<{ report: FulfillmentReportDTO }> {
+      return cachedQuery(`reports:fulfillment:${JSON.stringify(params)}`, () =>
+        requestJson(withQuery('/api/reports/fulfillment', {
+          dateFrom: params.dateFrom,
+          dateTo: params.dateTo,
+          status: params.status && params.status !== 'all' ? params.status : undefined,
+          customerId: params.customerId,
+          page: params.page ? String(params.page) : undefined,
+          pageSize: params.pageSize ? String(params.pageSize) : undefined,
+        })),
       );
     },
   },
@@ -438,6 +513,29 @@ export const api = {
       const result = await requestJson<{ ok: boolean; deletedId: number }>(`/api/daily-orders/${orderId}`, { method: 'DELETE' });
       invalidateQueries(['sheet', 'sheets', 'dashboard', 'reports']);
       return result;
+    },
+
+    async setFulfillment(
+      orderId: number,
+      data: { status: FulfillmentStatus; cancelReason?: string },
+    ): Promise<{ ok: boolean; orderId: number; dailySheetId: number; status: FulfillmentStatus }> {
+      const result = await requestJson<{ ok: boolean; orderId: number; dailySheetId: number; status: FulfillmentStatus }>(
+        `/api/daily-orders/${orderId}/fulfillment`,
+        { method: 'PATCH', body: JSON.stringify(data) },
+      );
+      invalidateQueries(['sheet', 'sheets', 'dashboard', 'reports']);
+      return result;
+    },
+  },
+
+  auditLogs: {
+    async list(params: Record<string, string | number | boolean | undefined>): Promise<AuditLogResponse> {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== '') query.set(key, String(value));
+      }
+      const suffix = query.size > 0 ? `?${query.toString()}` : '';
+      return requestJson<AuditLogResponse>(`/api/audit-logs${suffix}`);
     },
   },
 };

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, ne, sql } from 'drizzle-orm';
 import { clientOrders, customers, dailySheets, products, subMerchants } from '@/db/schema';
 import type { AppContextEnv } from '@/worker/types';
 import { requireAuth, requirePermission } from '@/worker/middleware/auth';
@@ -38,7 +38,7 @@ dashboardRoutes.get('/stats', requirePermission('dailySheets', 'view'), async (c
         .select({ total: count() })
         .from(clientOrders)
         .innerJoin(dailySheets, eq(clientOrders.dailySheetId, dailySheets.id))
-        .where(onLatestDay())
+        .where(and(onLatestDay(), ne(clientOrders.fulfillmentStatus, 'cancelled')))
         .get(),
       db
         .select({

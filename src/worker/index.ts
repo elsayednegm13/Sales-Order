@@ -14,18 +14,50 @@ import { dashboardRoutes } from '@/worker/routes/dashboard';
 import { dailySheetsRoutes } from '@/worker/routes/dailySheets';
 import { dailyOrdersRoutes } from '@/worker/routes/dailyOrders';
 import { reportsRoutes } from '@/worker/routes/reports';
+import { auditLogRoutes } from '@/worker/routes/auditLogs';
 
 const app = new Hono<AppContextEnv>();
+
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "frame-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "worker-src 'self' blob:",
+  "form-action 'self'",
+].join('; ');
+
+function withSecurityHeaders(response: Response, requestUrl: string, cacheControl?: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Frame-Options', 'DENY');
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  if (cacheControl) headers.set('Cache-Control', cacheControl);
+  if (new URL(requestUrl).protocol === 'https:') {
+    headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 // Global error handler returning structured Arabic JSON responses
 app.use('*', async (c, next) => {
   await next();
-  c.header('X-Frame-Options', 'DENY');
-  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
-  c.header('Content-Security-Policy', "frame-ancestors 'none'");
-  if (c.req.path.startsWith('/api/') && !c.req.path.startsWith('/api/assets/')) {
-    c.header('Cache-Control', 'private, no-store');
-  }
+  const cacheControl = c.req.path.startsWith('/api/') && !c.req.path.startsWith('/api/assets/')
+    ? 'private, no-store'
+    : undefined;
+  c.res = withSecurityHeaders(c.res, c.req.url, cacheControl);
 });
 
 app.onError((err, c) => {
@@ -70,6 +102,7 @@ app.route('/api/dashboard', dashboardRoutes);
 app.route('/api/daily-sheets', dailySheetsRoutes);
 app.route('/api/daily-orders', dailyOrdersRoutes);
 app.route('/api/reports', reportsRoutes);
+app.route('/api/audit-logs', auditLogRoutes);
 
 app.get('/api/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() });

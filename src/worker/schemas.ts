@@ -10,6 +10,19 @@ const weightSchema = z
     return value.length > 0 ? value : null;
   });
 
+function normalizeDeliveryPhone(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const western = trimmed.replace(/[٠-٩۰-۹]/g, (digit) => {
+    const arabic = '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹';
+    const index = arabic.indexOf(digit);
+    return index >= 0 ? String(index % 10) : digit;
+  });
+  const digits = western.replace(/\D/g, '');
+  if (/^1[0125]\d{8}$/.test(digits)) return `0${digits}`;
+  return western.trim();
+}
+
 const optionalText = (max: number) =>
   z
     .string()
@@ -79,6 +92,7 @@ export const createCustomerSchema = z.object({
   name: z.string().trim().min(2).max(120),
   defaultPhone: optionalText(40),
   defaultLocation: optionalText(160),
+  representativeName: optionalText(80),
 });
 
 export const updateCustomerSchema = z.object({
@@ -86,6 +100,7 @@ export const updateCustomerSchema = z.object({
   name: z.string().trim().min(2).max(120).optional(),
   defaultPhone: z.string().trim().max(40).nullable().optional(),
   defaultLocation: z.string().trim().max(160).nullable().optional(),
+  representativeName: optionalText(80),
 });
 
 export const createSubMerchantSchema = z.object({
@@ -158,16 +173,31 @@ const userPermissionsSchema = z
       view: z.boolean(),
       create: z.boolean(),
       edit: z.boolean(),
+      close: z.boolean().optional(),
       archive: z.boolean(),
-    }),
-    orders: permissionGroup({
-      view: z.boolean(),
-      create: z.boolean(),
-      edit: z.boolean(),
       delete: z.boolean(),
     }),
-    catalog: permissionGroup({ view: z.boolean(), manage: z.boolean() }),
-    customers: permissionGroup({ view: z.boolean(), manage: z.boolean() }),
+    orders: permissionGroup({
+      view: z.boolean().optional(),
+      create: z.boolean(),
+      edit: z.boolean(),
+      fulfillment: z.boolean().optional(),
+      cancel: z.boolean().optional(),
+      delete: z.boolean(),
+    }),
+    catalog: permissionGroup({
+      view: z.boolean(),
+      manage: z.boolean(),
+      bulkImport: z.boolean().optional(),
+      delete: z.boolean().optional(),
+    }),
+    customers: permissionGroup({
+      view: z.boolean(),
+      manage: z.boolean(),
+      bulkImport: z.boolean().optional(),
+      delete: z.boolean().optional(),
+      deleteSubMerchant: z.boolean().optional(),
+    }),
     reports: permissionGroup({
       view: z.boolean(),
       exportExcel: z.boolean(),
@@ -207,14 +237,51 @@ export const updateUserSchema = z
   })
   .strict();
 
+const BRANDING_ASSET_PATH = /^\/api\/assets\/branding\/[a-zA-Z0-9._-]+$/;
+
+const brandingAssetUrl = z
+  .union([z.string().max(500), z.null()])
+  .optional()
+  .transform((value, ctx) => {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (!BRANDING_ASSET_PATH.test(trimmed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'رابط الشعار يجب أن يكون ملفاً داخلياً من الهوية البصرية',
+      });
+      return z.NEVER;
+    }
+    return trimmed;
+  });
+
 export const updateSettingsSchema = z
   .object({
     companyName: z.string().trim().min(2).max(120),
     startingOrderNumber: z.number().int().min(1).max(999_999_999),
-    logoUrl: z.string().trim().max(500).nullable().optional(),
-    faviconUrl: z.string().trim().max(500).nullable().optional(),
+    logoUrl: brandingAssetUrl,
+    faviconUrl: brandingAssetUrl,
   })
   .strict();
+
+const passwordField = z.string().min(6).max(128);
+
+export const passwordResetRequestSchema = z.object({
+  username: z.string().trim().min(1).max(40),
+}).strict();
+
+export const passwordResetConfirmSchema = z.object({
+  mode: z.enum(['employee', 'admin_recovery']),
+  username: z.string().trim().min(1).max(40),
+  code: z.string().trim().min(1).max(80),
+  newPassword: passwordField,
+}).strict();
+
+export const regenerateRecoveryCodesSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+}).strict();
 
 const dateSchema = z
   .string()
@@ -285,7 +352,16 @@ const clientOrderFields = {
   deliveryType: z.enum(['client_warehouse', 'sub_merchant'] as const),
   subMerchantId: z.coerce.number().int().positive().nullable().optional(),
   recipientName: optionalText(120),
-  deliveryPhone: z.string().trim().min(3).max(40),
+  deliveryPhone: z
+    .string()
+    .trim()
+    .max(40)
+    .optional()
+    .default('')
+    .transform((value) => normalizeDeliveryPhone(value))
+    .refine((value) => value.length === 0 || value.length >= 3, {
+      message: 'هاتف التسليم يجب أن يكون بين 3 و40 حرفاً عند إدخاله',
+    }),
   deliveryLocation: z.string().trim().min(2).max(160),
   trucksCount: z.coerce.number().int().min(1).max(99).optional().default(1),
   representativeName: optionalText(80),
@@ -316,13 +392,18 @@ export const clientOrderSchema = z
 
 export const updateClientOrderSchema = z.object(clientOrderFields).superRefine(requireSubMerchant);
 
+export const fulfillmentStatusSchema = z.object({
+  status: z.enum(['pending', 'dispatched', 'cancelled']),
+  cancelReason: z.string().trim().max(160).optional(),
+});
+
 const FIELD_MESSAGES: Record<string, string> = {
   code: 'كود الصنف غير صالح',
   name: 'الاسم غير صالح',
   packingCapacity: 'سعة التعبئة يجب أن تكون رقماً صحيحاً أكبر من صفر',
   sheetNumber: 'رقم الأوردر يجب أن يكون بين خانة و40 خانة',
   sheetDate: 'تاريخ الأوردر غير صالح',
-  deliveryPhone: 'هاتف التسليم مطلوب',
+  deliveryPhone: 'هاتف التسليم يجب أن يكون بين 3 و40 حرفاً عند إدخاله',
   deliveryLocation: 'عنوان التسليم مطلوب',
   cartonsQty: 'كمية الكراتين غير صالحة',
   loosePiecesQty: 'عدد القطع غير صالح',

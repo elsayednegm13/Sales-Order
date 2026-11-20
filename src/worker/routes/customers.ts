@@ -1,13 +1,16 @@
 import { Hono } from 'hono';
-import { and, asc, count, eq, inArray, like, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { clientOrders, customers, subMerchants, type CustomerRow, type SubMerchantRow } from '@/db/schema';
 import type { CustomerDTO, SubMerchantDTO } from '@/shared/types';
 import type { AppContextEnv } from '@/worker/types';
-import { requireAdmin, requireAuth, requirePermission } from '@/worker/middleware/auth';
+import { requireAuth, requirePermission } from '@/worker/middleware/auth';
 import { bumpCacheVersions, CACHE_NAMESPACES, readVersionedCache } from '@/worker/cache';
 import { chunkedInArrayQuery } from '@/worker/utils/dbChunk';
-import { createCustomerSchema, customerBulkImportSchema, readJson, updateCustomerSchema } from '@/worker/schemas';
+import { createCustomerSchema, customerBulkImportSchema, isUniqueConstraintError, readJson, updateCustomerSchema } from '@/worker/schemas';
 import { importCustomers } from '@/worker/services/bulkImport';
+import { containsLike } from '@/worker/utils/like';
+import { recordAuditLog } from '@/worker/services/auditLog';
+import { clientIp } from '@/worker/utils/loginRateLimit';
 
 export const customersRoutes = new Hono<AppContextEnv>();
 
@@ -74,11 +77,10 @@ customersRoutes.get('/', requirePermission('customers', 'view'), async (c) => {
       const db = c.get('db');
       const filters = [];
       if (search) {
-        const term = `%${search}%`;
         const nameOrPhone = or(
-          like(customers.name, term),
-          like(customers.defaultPhone, term),
-          like(customers.clientCode, term)
+          containsLike(customers.name, search),
+          containsLike(customers.defaultPhone, search),
+          containsLike(customers.clientCode, search)
         );
         if (nameOrPhone) filters.push(nameOrPhone);
       }
@@ -161,7 +163,7 @@ customersRoutes.get('/:id/sub-merchants', requirePermission('customers', 'view')
   return c.json(payload);
 });
 
-customersRoutes.post('/bulk-import', requirePermission('customers', 'manage'), async (c) => {
+customersRoutes.post('/bulk-import', requirePermission('customers', 'bulkImport'), async (c) => {
   const parsed = await readJson(c, customerBulkImportSchema);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   if (parsed.data.customers.length === 0 && parsed.data.subMerchants.length === 0) {
@@ -176,6 +178,27 @@ customersRoutes.post('/bulk-import', requirePermission('customers', 'manage'), a
     parsed.data.selectedMerchantFields,
   );
   await bumpCacheVersions(db, [CACHE_NAMESPACES.customers, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
+  const conflict = result.errors.find((row) => row.message.includes('مسجّل') || row.message.includes('تعارض'));
+  if (conflict && result.created === 0 && result.updated === 0) {
+    return c.json({ error: conflict.message, ...result }, 409);
+  }
+  const user = c.get('user');
+  await recordAuditLog(db, {
+    actorUserId: user.id,
+    actorUsername: user.username,
+    actorFullName: user.fullName,
+    module: 'customers',
+    action: 'bulk_import',
+    entityType: 'customer',
+    summary: `استيراد عملاء: أُنشئ ${result.created} وحُدّث ${result.updated}`,
+    details: {
+      created: result.created,
+      updated: result.updated,
+      rows: parsed.data.customers.length + parsed.data.subMerchants.length,
+      errorCount: result.errors.length,
+    },
+    ipAddress: clientIp((name) => c.req.header(name)),
+  });
   return c.json(result);
 });
 
@@ -205,19 +228,27 @@ customersRoutes.post('/', requirePermission('customers', 'manage'), async (c) =>
   }
 
   const db = c.get('db');
-  const inserted = await db
-    .insert(customers)
-    .values({
-      clientCode,
-      name,
-      defaultPhone: phone.value,
-      defaultLocation: location.value,
-    })
-    .returning()
-    .get();
+  try {
+    const inserted = await db
+      .insert(customers)
+      .values({
+        clientCode,
+        name,
+        defaultPhone: phone.value,
+        defaultLocation: location.value,
+        representativeName: body.representativeName ?? null,
+      })
+      .returning()
+      .get();
 
-  await bumpCacheVersions(db, [CACHE_NAMESPACES.customers, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
-  return c.json({ customer: mapCustomer(inserted, 0, []) }, 201);
+    await bumpCacheVersions(db, [CACHE_NAMESPACES.customers, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
+    return c.json({ customer: mapCustomer(inserted, 0, []) }, 201);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return c.json({ error: 'كود العميل مسجّل مسبقاً لعميل آخر' }, 409);
+    }
+    throw error;
+  }
 });
 
 customersRoutes.put('/:id', requirePermission('customers', 'manage'), async (c) => {
@@ -274,12 +305,29 @@ customersRoutes.put('/:id', requirePermission('customers', 'manage'), async (c) 
     defaultLocation = location.value;
   }
 
-  const updated = await db
-    .update(customers)
-    .set({ clientCode, name, defaultPhone, defaultLocation })
-    .where(eq(customers.id, id))
-    .returning()
-    .get();
+  let representativeName = existing.representativeName;
+  if (body.representativeName !== undefined) {
+    const representative = readOptionalText(body.representativeName, 80);
+    if (!representative.ok) {
+      return c.json({ error: 'اسم المندوب أطول من الحد المسموح' }, 400);
+    }
+    representativeName = representative.value;
+  }
+
+  let updated;
+  try {
+    updated = await db
+      .update(customers)
+      .set({ clientCode, name, defaultPhone, defaultLocation, representativeName })
+      .where(eq(customers.id, id))
+      .returning()
+      .get();
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return c.json({ error: 'كود العميل مسجّل مسبقاً لعميل آخر' }, 409);
+    }
+    throw error;
+  }
 
   const subCount = await db
     .select({ total: count() })
@@ -291,14 +339,14 @@ customersRoutes.put('/:id', requirePermission('customers', 'manage'), async (c) 
   return c.json({ customer: mapCustomer(updated, subCount?.total ?? 0) });
 });
 
-customersRoutes.delete('/:id', requireAdmin, async (c) => {
+customersRoutes.delete('/:id', requirePermission('customers', 'delete'), async (c) => {
   const id = Number.parseInt(c.req.param('id'), 10);
   if (!Number.isFinite(id)) {
     return c.json({ error: 'معرّف العميل غير صالح' }, 400);
   }
 
   const db = c.get('db');
-  const existing = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, id)).get();
+  const existing = await db.select({ id: customers.id, name: customers.name, clientCode: customers.clientCode }).from(customers).where(eq(customers.id, id)).get();
   if (!existing) {
     return c.json({ error: 'العميل غير موجود' }, 404);
   }
@@ -319,7 +367,36 @@ customersRoutes.delete('/:id', requireAdmin, async (c) => {
     );
   }
 
+  const merchants = await db
+    .select({ total: count() })
+    .from(subMerchants)
+    .where(eq(subMerchants.customerId, id))
+    .get();
+  const subMerchantsCount = merchants?.total ?? 0;
+  if (subMerchantsCount > 0) {
+    return c.json(
+      {
+        error: `لا يمكن حذف العميل لوجود ${subMerchantsCount} تاجر فرعي مرتبط به؛ احذف التجار الفرعيين أولاً`,
+        code: 'CUSTOMER_HAS_MERCHANTS',
+      },
+      400,
+    );
+  }
+
   await db.delete(customers).where(eq(customers.id, id));
+  const user = c.get('user');
+  await recordAuditLog(db, {
+    actorUserId: user.id,
+    actorUsername: user.username,
+    actorFullName: user.fullName,
+    module: 'customers',
+    action: 'delete_customer',
+    entityType: 'customer',
+    entityId: id,
+    entityLabel: `${existing.clientCode} — ${existing.name}`,
+    summary: `حذف العميل ${existing.name} (${existing.clientCode})`,
+    ipAddress: clientIp((name) => c.req.header(name)),
+  });
   await bumpCacheVersions(db, [CACHE_NAMESPACES.customers, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
   return c.json({ ok: true, deletedId: id });
 });

@@ -33,7 +33,7 @@ export function Pagination({
           type="button"
           disabled={page <= 1}
           onClick={() => onPage(page - 1)}
-          className="rounded-lg border px-3 py-1.5 text-xs font-bold disabled:opacity-40 dark:border-slate-700"
+          className="rounded-lg border px-3 py-1.5 text-xs font-bold disabled:opacity-40 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white"
         >
           السابق
         </button>
@@ -44,8 +44,8 @@ export function Pagination({
             type="button"
             onClick={() => onPage(number)}
             aria-current={number === page ? 'page' : undefined}
-            className={`tabular-nums h-8 min-w-8 rounded-lg border px-2 text-xs font-bold dark:border-slate-700 ${
-              number === page ? 'border-blue-600 bg-blue-600 text-white' : ''
+            className={`tabular-nums h-8 min-w-8 rounded-lg border px-2 text-xs font-bold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white ${
+              number === page ? 'border-blue-600 bg-blue-600 text-white dark:hover:!bg-blue-600 dark:hover:!text-white' : ''
             }`}
           >
             {number}
@@ -56,7 +56,7 @@ export function Pagination({
           type="button"
           disabled={page >= pageCount}
           onClick={() => onPage(page + 1)}
-          className="rounded-lg border px-3 py-1.5 text-xs font-bold disabled:opacity-40 dark:border-slate-700"
+          className="rounded-lg border px-3 py-1.5 text-xs font-bold disabled:opacity-40 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white"
         >
           التالي
         </button>

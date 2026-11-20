@@ -3,44 +3,50 @@ import { eq, sql } from 'drizzle-orm';
 import { users } from '@/db/schema';
 import type { AppContextEnv } from '@/worker/types';
 import { verifyPassword, hashPassword } from '@/worker/utils/crypto';
-import { clearAuthCookie, extractAuthToken, setAuthCookie, signUserToken, verifyUserToken } from '@/worker/utils/jwt';
+import { clearAuthCookie, extractAuthToken, setAuthCookie, signUserToken, verifyUserToken, resolveJwtSecret } from '@/worker/utils/jwt';
+import { normalizeRecoveryCode } from '@/worker/utils/crypto';
 import { mapUserRowToDTO, requireAuth, safeUserColumns } from '@/worker/middleware/auth';
-import { loginSchema, readJson } from '@/worker/schemas';
+import { loginSchema, passwordResetConfirmSchema, passwordResetRequestSchema, readJson } from '@/worker/schemas';
 import { nextSheetNumber } from '@/worker/services/dailySheets';
+import {
+  RESET_CONFIRM_ERROR,
+  RESET_REQUEST_MESSAGE,
+  RECOVERY_CONFIRM_ERROR,
+  confirmAdminRecovery,
+  confirmEmployeeReset,
+  recordPasswordResetRequest,
+} from '@/worker/services/passwordRecovery';
+import {
+  activeLoginLock,
+  clearLoginFailures,
+  clientIp,
+  failureRules,
+  loginRateKeys,
+  recoverySuccessKeys,
+  registerLoginFailure,
+  resetRequestRules,
+  resetVerifyRules,
+  type LoginLock,
+} from '@/worker/utils/loginRateLimit';
 
 export const authRoutes = new Hono<AppContextEnv>();
 
 const UNIFIED_LOGIN_ERROR = 'اسم المستخدم أو كلمة المرور غير صحيحة';
-const dummyPasswordHash = hashPassword('timing-equalization-placeholder');
+let dummyPasswordHash: Promise<string> | null = null;
 
-type AttemptBucket = {
-  failures: number;
-  windowStart: number;
-  blockedUntil: number;
-};
-
-const loginAttempts = new Map<string, AttemptBucket>();
-const WINDOW_MS = 10 * 60 * 1000;
-const COOLDOWN_MS = 60 * 1000;
-const FAILURE_LIMIT = 8;
-
-function clientAddress(header: (name: string) => string | undefined): string {
-  return header('CF-Connecting-IP') || header('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+function dummyHash(): Promise<string> {
+  dummyPasswordHash ??= hashPassword('timing-equalization-placeholder');
+  return dummyPasswordHash;
 }
 
-function attemptKey(address: string, username: string): string {
-  return `${address}|${username}`;
-}
-
-function currentBucket(key: string): AttemptBucket {
-  const now = Date.now();
-  const existing = loginAttempts.get(key);
-  if (!existing || now - existing.windowStart > WINDOW_MS) {
-    const fresh = { failures: 0, windowStart: now, blockedUntil: 0 };
-    loginAttempts.set(key, fresh);
-    return fresh;
-  }
-  return existing;
+function tooMany(lock: LoginLock) {
+  return {
+    body: {
+      error: `تم تجاوز عدد محاولات الدخول المسموحة. يرجى المحاولة مرة أخرى بعد ${lock.minutes} دقيقة.`,
+      code: 'RATE_LIMITED',
+    },
+    retryAfter: String(lock.retryAfterSeconds),
+  };
 }
 
 authRoutes.post('/login', async (c) => {
@@ -49,13 +55,15 @@ authRoutes.post('/login', async (c) => {
 
   const username = parsed.data.username.trim().toLowerCase();
   const password = parsed.data.password;
-  const key = attemptKey(clientAddress((name) => c.req.header(name)), username);
-  const bucket = currentBucket(key);
-  if (bucket.blockedUntil > Date.now()) {
-    return c.json({ error: 'محاولات كثيرة. انتظر قليلاً ثم أعد المحاولة', code: 'RATE_LIMITED' }, 429);
+  const keys = loginRateKeys(clientIp((name) => c.req.header(name)), username);
+  const watched = [keys.ipUser, keys.ip, keys.user];
+  const db = c.get('db');
+  const blocked = await activeLoginLock(db, watched);
+  if (blocked) {
+    const limited = tooMany(blocked);
+    return c.json(limited.body, 429, { 'Retry-After': limited.retryAfter });
   }
 
-  const db = c.get('db');
   const userRow = await db
     .select({
       ...safeUserColumns,
@@ -67,15 +75,18 @@ authRoutes.post('/login', async (c) => {
 
   const passwordOk = userRow
     ? await verifyPassword(password, userRow.passwordHash)
-    : await verifyPassword(password, await dummyPasswordHash);
+    : await verifyPassword(password, await dummyHash());
 
   if (!userRow || !passwordOk || !userRow.isActive) {
-    bucket.failures += 1;
-    if (bucket.failures >= FAILURE_LIMIT) bucket.blockedUntil = Date.now() + COOLDOWN_MS;
+    const lock = await registerLoginFailure(db, failureRules(keys));
+    if (lock) {
+      const limited = tooMany(lock);
+      return c.json(limited.body, 429, { 'Retry-After': limited.retryAfter });
+    }
     return c.json({ error: UNIFIED_LOGIN_ERROR }, 401);
   }
 
-  loginAttempts.delete(key);
+  await clearLoginFailures(db, [keys.ipUser, keys.user]);
   const userDto = mapUserRowToDTO(userRow);
   const token = await signUserToken(c, { ...userDto, tokenVersion: userRow.tokenVersion });
   setAuthCookie(c, token);
@@ -83,6 +94,61 @@ authRoutes.post('/login', async (c) => {
     user: userDto,
     nextSheetNumber: await nextSheetNumber(db),
   });
+});
+
+authRoutes.post('/password-reset/request', async (c) => {
+  const parsed = await readJson(c, passwordResetRequestSchema);
+  if (!parsed.ok) return c.json({ message: RESET_REQUEST_MESSAGE });
+  const username = parsed.data.username.trim().toLowerCase();
+  const ip = clientIp((name) => c.req.header(name));
+  const db = c.get('db');
+  const rules = resetRequestRules(ip, username);
+  const blocked = await activeLoginLock(db, rules.map((item) => item.key));
+  if (blocked) {
+    const limited = tooMany(blocked);
+    return c.json(limited.body, 429, { 'Retry-After': limited.retryAfter });
+  }
+  const lock = await registerLoginFailure(db, rules);
+  if (lock) {
+    const limited = tooMany(lock);
+    return c.json(limited.body, 429, { 'Retry-After': limited.retryAfter });
+  }
+  await recordPasswordResetRequest(db, username);
+  return c.json({ message: RESET_REQUEST_MESSAGE });
+});
+
+authRoutes.post('/password-reset/confirm', async (c) => {
+  const parsed = await readJson(c, passwordResetConfirmSchema);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const username = parsed.data.username.trim().toLowerCase();
+  const ip = clientIp((name) => c.req.header(name));
+  const db = c.get('db');
+  const rules = resetVerifyRules(ip, username);
+  const blocked = await activeLoginLock(db, rules.map((item) => item.key));
+  if (blocked) {
+    const limited = tooMany(blocked);
+    return c.json(limited.body, 429, { 'Retry-After': limited.retryAfter });
+  }
+  const invalidMessage = parsed.data.mode === 'admin_recovery' ? RECOVERY_CONFIRM_ERROR : RESET_CONFIRM_ERROR;
+  let secret: string;
+  try {
+    secret = resolveJwtSecret(c);
+  } catch (error) {
+    throw error;
+  }
+  const accepted = parsed.data.mode === 'admin_recovery'
+    ? await confirmAdminRecovery(db, secret, username, normalizeRecoveryCode(parsed.data.code), parsed.data.newPassword, Date.now(), ip)
+    : await confirmEmployeeReset(db, secret, username, normalizeRecoveryCode(parsed.data.code), parsed.data.newPassword, Date.now(), ip);
+  if (!accepted) {
+    const lock = await registerLoginFailure(db, rules);
+    if (lock) {
+      const limited = tooMany(lock);
+      return c.json(limited.body, 429, { 'Retry-After': limited.retryAfter });
+    }
+    return c.json({ error: invalidMessage }, 400);
+  }
+  await clearLoginFailures(db, recoverySuccessKeys(ip, username));
+  return c.json({ ok: true, message: 'تم تعيين كلمة المرور الجديدة بنجاح؛ يمكنك تسجيل الدخول الآن' });
 });
 
 authRoutes.post('/logout', async (c) => {

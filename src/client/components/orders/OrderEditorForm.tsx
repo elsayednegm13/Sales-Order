@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode } from 'react';
+import { useEffect, type FormEvent, type ReactNode } from 'react';
 import { Loader2, Trash2 } from 'lucide-react';
 import { SearchCombobox } from '@/client/components/ui/SearchCombobox';
 import { calculateOrderItemTotals } from '@/shared/domain';
@@ -86,21 +86,30 @@ export function OrderEditorForm({
   onRemoveLine: (key: string) => void;
   onAddLine: () => void;
   onQuickCustomer: (query: string) => void;
-  onQuickMerchant: (query: string) => void;
+  onQuickMerchant?: (query: string) => void;
   onQuickProduct?: (lineKey: string, query: string) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent) => void;
 }) {
   const selected = customers.find((item) => item.id === Number(customerId));
   const merchants = selected?.subMerchants ?? [];
-
   const merchant = deliveryType === 'sub_merchant';
+
+  useEffect(() => {
+    for (const line of lines) {
+      const product = products.find((item) => item.id === Number(line.productId));
+      if (!product) continue;
+      if (!orderModesForProduct(product.itemType).includes(line.orderMode)) {
+        onLine(line.key, { orderMode: product.itemType });
+      }
+    }
+  }, [lines, onLine, products]);
 
   return (
     <form onSubmit={onSubmit} className="rounded-lg border border-slate-200 border-r-4 border-r-blue-600 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
       <div className="mb-3 flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
         <h2 className="text-sm font-bold text-slate-900 dark:text-white">{title}</h2>
-        <button type="button" onClick={onCancel} aria-label="إغلاق" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-base text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">✕</button>
+        <button type="button" onClick={onCancel} aria-label="إغلاق" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-base text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white">✕</button>
       </div>
       {formError && (
         <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:bg-red-950/40 dark:text-red-300">
@@ -138,9 +147,21 @@ export function OrderEditorForm({
         </Field>
         {merchant && (
           <div className="lg:col-span-3">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-200">التاجر الفرعي</span>
+              {onQuickMerchant && customerId ? (
+                <button
+                  type="button"
+                  onClick={() => onQuickMerchant('')}
+                  className="text-[11px] font-bold text-blue-700 hover:text-blue-900 dark:text-blue-300 dark:hover:text-white"
+                >
+                  + إضافة تاجر جديد
+                </button>
+              ) : null}
+            </div>
             <SearchCombobox
               dense
-              label="التاجر الفرعي"
+              label=""
               placeholder="ابحث باسم التاجر أو هاتفه"
               items={merchants}
               selectedKey={subMerchantId}
@@ -153,7 +174,7 @@ export function OrderEditorForm({
                 <span>{merchantItem.name}{merchantItem.phone ? ` — ${merchantItem.phone}` : ''}</span>
               )}
               onSelect={onMerchant}
-              quickAddLabel={(query) => `+ إضافة تاجر جديد: "${query}"`}
+              quickAddLabel={onQuickMerchant ? (query) => `+ إضافة تاجر جديد: "${query}"` : undefined}
               onQuickAdd={onQuickMerchant}
             />
           </div>
@@ -162,7 +183,7 @@ export function OrderEditorForm({
           <input value={recipientName} onChange={(event) => onRecipient(event.target.value)} className={inputClass} />
         </Field>
         <Field label="هاتف التسليم" className="lg:col-span-2">
-          <input dir="ltr" required value={deliveryPhone} onChange={(event) => onPhone(event.target.value)} className={`${inputClass} text-left`} />
+          <input dir="ltr" value={deliveryPhone} onChange={(event) => onPhone(event.target.value)} className={`${inputClass} text-left`} />
         </Field>
         <Field label="عنوان التسليم" className="lg:col-span-3">
           <input required value={deliveryLocation} onChange={(event) => onLocation(event.target.value)} className={inputClass} />
@@ -189,7 +210,7 @@ export function OrderEditorForm({
         <span className="col-span-2">ملاحظة</span>
         <span className="col-span-1" />
       </div>
-      <div className="mt-1 space-y-2">
+      <div className="mt-1 max-h-[45vh] space-y-2 overflow-y-auto">
         {lines.map((line) => {
           const product = products.find((item) => item.id === Number(line.productId));
           const pieces = product
@@ -230,8 +251,8 @@ export function OrderEditorForm({
                 />
               </div>
               <Field label="النمط" hideLabel className="lg:col-span-2">
-                <select aria-label="نمط البيع" value={line.orderMode} onChange={(event) => onLine(line.key, { orderMode: event.target.value as OrderMode })} className={inputClass}>
-                  {(product ? orderModesForProduct(product.itemType) : (['carton', 'bag', 'piece', 'kg'] as OrderMode[])).map((mode) => (
+                <select aria-label="نمط البيع" value={line.orderMode} disabled={!product} onChange={(event) => onLine(line.key, { orderMode: event.target.value as OrderMode })} className={inputClass}>
+                  {(product ? orderModesForProduct(product.itemType) : []).map((mode) => (
                     <option key={mode} value={mode}>{ORDER_MODE_LABELS_AR[mode]}</option>
                   ))}
                 </select>
@@ -256,7 +277,7 @@ export function OrderEditorForm({
                 <input aria-label="ملاحظة السطر" value={line.notes} onChange={(event) => onLine(line.key, { notes: event.target.value })} placeholder="ملاحظة" className={inputClass} />
               </Field>
               <div className="lg:col-span-1 lg:flex lg:justify-center">
-                <button type="button" aria-label="حذف" title="حذف" onClick={() => onRemoveLine(line.key)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-red-950/40">
+                <button type="button" aria-label="حذف" title="حذف" onClick={() => onRemoveLine(line.key)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-slate-700 dark:text-slate-300 dark:hover:border-red-800 dark:hover:bg-red-950/70 dark:hover:text-red-200">
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -266,10 +287,12 @@ export function OrderEditorForm({
       </div>
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 dark:border-slate-800">
-        <button type="button" onClick={onAddLine} className="text-xs font-bold text-blue-600">+ إضافة سطر صنف</button>
+        <button type="button" onClick={onAddLine} disabled={lines.length >= 80} className="text-xs font-bold text-blue-600 disabled:cursor-not-allowed disabled:text-slate-400">
+          {lines.length >= 80 ? 'الحد الأقصى 80 صنفاً في الطلب' : '+ إضافة سطر صنف'}
+        </button>
         <p className="tabular-nums text-xs font-medium text-slate-600 dark:text-slate-300">{liveLabel}</p>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={onCancel} className="h-9 rounded-lg border border-slate-300 px-3 text-xs font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200">إلغاء</button>
+          <button type="button" onClick={onCancel} className="h-9 rounded-lg border border-slate-300 px-3 text-xs font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إلغاء</button>
           <button type="submit" disabled={isSaving} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-bold text-white disabled:opacity-60">
             {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             حفظ الطلب

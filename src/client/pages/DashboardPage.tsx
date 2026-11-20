@@ -79,7 +79,7 @@ export function DashboardPage() {
             {stats.recentSheets.map((sheet) => (
               <li key={sheet.id} className="flex items-center justify-between gap-4 py-3">
                 <div>
-                  <Link to={`/daily-sheets/${sheet.id}`} className="font-bold text-slate-900 hover:text-blue-700 dark:text-slate-100">
+                  <Link to={`/daily-sheets/${sheet.id}`} className="font-bold text-slate-900 hover:text-blue-700 dark:text-slate-100 dark:hover:text-blue-300">
                     أوردر #{sheet.sheetNumber}
                   </Link>
                   <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">

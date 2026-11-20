@@ -404,9 +404,33 @@ html.theme-transitioning *::after {
 .analytics-print th,
 .analytics-print td {
   border: 1px solid #000;
-  padding: 4px 6px;
-  font-size: 11px;
+  padding: 3px 4px;
+  font-size: 9.5px;
   text-align: center;
+  word-break: break-word;
+}
+
+.analytics-print tfoot td {
+  font-weight: 700;
+  background: #f1f5f9;
+}
+
+.analytics-print thead {
+  display: table-header-group;
+}
+
+.analytics-print .sheet-block {
+  margin-bottom: 16px;
+}
+
+.analytics-print .sheet-block h2,
+.analytics-print .sheet-block tr {
+  break-inside: avoid;
+}
+
+.analytics-print tr.order-head td {
+  font-weight: 700;
+  background: #ecfdf5;
 }
 
 @media print {

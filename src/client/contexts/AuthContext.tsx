@@ -44,6 +44,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void refreshUser();
   }, [refreshUser]);
 
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setUser(null);
+      setNextSheetNumber('');
+      if (window.location.pathname !== '/login') {
+        window.location.assign('/login');
+      }
+    };
+    window.addEventListener('auth:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', onUnauthorized);
+  }, []);
+
   const login = useCallback(async (credentials: LoginRequestDTO): Promise<UserDTO> => {
     const res = await api.auth.login(credentials);
     setUser(res.user);

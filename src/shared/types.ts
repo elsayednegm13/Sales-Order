@@ -6,6 +6,7 @@ export type ItemType = 'carton' | 'bag' | 'piece' | 'kg';
 
 export type DailySheetStatus = 'open' | 'closed' | 'archived';
 export type DeliveryType = 'client_warehouse' | 'sub_merchant';
+export type FulfillmentStatus = 'pending' | 'dispatched' | 'cancelled';
 export type OrderMode = ItemType;
 
 export interface UserPermissions {
@@ -13,21 +14,30 @@ export interface UserPermissions {
     view: boolean;
     create: boolean;
     edit: boolean;
+    close: boolean;
     archive: boolean;
+    delete: boolean;
   };
   orders: {
     view: boolean;
     create: boolean;
     edit: boolean;
+    fulfillment: boolean;
+    cancel: boolean;
     delete: boolean;
   };
   catalog: {
     view: boolean;
     manage: boolean;
+    bulkImport: boolean;
+    delete: boolean;
   };
   customers: {
     view: boolean;
     manage: boolean;
+    bulkImport: boolean;
+    delete: boolean;
+    deleteSubMerchant: boolean;
   };
   reports: {
     view: boolean;
@@ -262,6 +272,10 @@ export interface ClientOrderDetailDTO {
   totalCartons: number;
   totalPieces: number;
   totalWeightKg: number;
+  fulfillmentStatus: FulfillmentStatus;
+  dispatchedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
   items: OrderItemDetailDTO[];
 }
 
@@ -326,6 +340,14 @@ export interface ReportProductTotalDTO {
   totalCartons: number;
   totalPieces: number;
   totalWeightKg: number;
+  dispatchedOrdersCount: number;
+  dispatchedCartons: number;
+  dispatchedPieces: number;
+  dispatchedWeightKg: number;
+  pendingOrdersCount: number;
+  pendingCartons: number;
+  pendingPieces: number;
+  pendingWeightKg: number;
 }
 
 export interface ReportChannelDTO {
@@ -336,6 +358,14 @@ export interface ReportChannelDTO {
   totalCartons: number;
   totalPieces: number;
   totalWeightKg: number;
+  dispatchedOrdersCount: number;
+  pendingOrdersCount: number;
+  dispatchedCartons: number;
+  dispatchedPieces: number;
+  dispatchedWeightKg: number;
+  pendingCartons: number;
+  pendingPieces: number;
+  pendingWeightKg: number;
   products: ReportProductTotalDTO[];
 }
 
@@ -347,6 +377,14 @@ export interface ReportCustomerDTO {
   totalCartons: number;
   totalPieces: number;
   totalWeightKg: number;
+  dispatchedOrdersCount: number;
+  pendingOrdersCount: number;
+  dispatchedCartons: number;
+  dispatchedPieces: number;
+  dispatchedWeightKg: number;
+  pendingCartons: number;
+  pendingPieces: number;
+  pendingWeightKg: number;
   channels: ReportChannelDTO[];
 }
 
@@ -358,6 +396,106 @@ export interface SalesReportDTO {
   summary: ReportSummaryDTO;
   customers: ReportCustomerDTO[];
   products: ReportProductTotalDTO[];
+  productsBySheet: ReportSheetProductsDTO[];
+}
+
+export interface ReportSheetTotalsDTO {
+  ordersCount: number;
+  totalCartons: number;
+  totalPieces: number;
+  totalWeightKg: number;
+  dispatchedCartons: number;
+  dispatchedPieces: number;
+  dispatchedWeightKg: number;
+  pendingCartons: number;
+  pendingPieces: number;
+  pendingWeightKg: number;
+}
+
+export interface ReportSheetProductsDTO {
+  sheetId: number;
+  sheetNumber: string;
+  sheetDate: string;
+  totals: ReportSheetTotalsDTO;
+  products: ReportProductTotalDTO[];
+}
+
+export interface FulfillmentBucketDTO {
+  orders: number;
+  customers: number;
+  cartons: number;
+  pieces: number;
+  weightKg: number;
+}
+
+export interface FulfillmentItemDTO {
+  productCode: string;
+  productName: string;
+  orderMode: OrderMode;
+  cartonsQty: number;
+  totalPieces: number;
+  weightKg: number;
+}
+
+export interface FulfillmentProductSplitDTO {
+  productId: number;
+  productCode: string;
+  productName: string;
+  dispatchedCartons: number;
+  dispatchedPieces: number;
+  dispatchedWeightKg: number;
+  pendingCartons: number;
+  pendingPieces: number;
+  pendingWeightKg: number;
+}
+
+export interface FulfillmentCustomerSummaryDTO {
+  customerId: number;
+  clientCode: string;
+  customerName: string;
+  dispatchedOrdersCount: number;
+  pendingOrdersCount: number;
+  dispatchedCartons: number;
+  dispatchedPieces: number;
+  dispatchedWeightKg: number;
+  pendingCartons: number;
+  pendingPieces: number;
+  pendingWeightKg: number;
+  products: FulfillmentProductSplitDTO[];
+}
+
+export interface FulfillmentReportOrderDTO {
+  id: number;
+  sheetNumber: string;
+  orderSequence: number;
+  sheetDate: string;
+  customerName: string;
+  customerCode: string;
+  receiverName: string;
+  totalCartons: number;
+  totalPieces: number;
+  totalWeightKg: number;
+  fulfillmentStatus: FulfillmentStatus;
+  dispatchedAt: string | null;
+  cancelledAt: string | null;
+  items: FulfillmentItemDTO[];
+}
+
+export interface FulfillmentReportDTO {
+  from: string;
+  to: string;
+  summary: {
+    dispatchedCustomers: number;
+    pendingCustomers: number;
+    dispatched: FulfillmentBucketDTO;
+    pending: FulfillmentBucketDTO;
+    cancelled: FulfillmentBucketDTO;
+  };
+  customerSummary: FulfillmentCustomerSummaryDTO[];
+  orders: FulfillmentReportOrderDTO[];
+  page: number;
+  pageSize: number;
+  total: number;
 }
 
 export interface UpdateClientOrderDTO {

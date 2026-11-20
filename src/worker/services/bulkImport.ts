@@ -2,6 +2,7 @@ import { eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '@/db';
 import { customers, products, subMerchants } from '@/db/schema';
 import type { ItemType, ProductCategory, ProductGrade } from '@/shared/types';
+import { isUniqueConstraintError } from '@/worker/schemas';
 import { chunkedInArrayQuery } from '@/worker/utils/dbChunk';
 
 export interface ProductImportInput {
@@ -49,10 +50,36 @@ function storedPacking(itemType: ItemType, packing: number | null | undefined): 
   return packing && packing > 0 ? packing : 1;
 }
 
-async function runStatements(statements: Array<Promise<unknown>>): Promise<void> {
+async function runStatements(
+  statements: Array<Promise<unknown>>,
+  onUnique?: () => void,
+): Promise<void> {
   for (let index = 0; index < statements.length; index += 20) {
     const chunk = statements.slice(index, index + 20);
-    for (const statement of chunk) await statement;
+    for (const statement of chunk) {
+      try {
+        await statement;
+      } catch (error) {
+        if (!isUniqueConstraintError(error) || !onUnique) throw error;
+        onUnique();
+      }
+    }
+  }
+}
+
+async function insertInChunks<T>(
+  rows: T[],
+  write: (chunk: T[]) => Promise<unknown>,
+  onConflict: (row: T) => void,
+): Promise<void> {
+  for (let index = 0; index < rows.length; index += 8) {
+    const chunk = rows.slice(index, index + 8);
+    try {
+      await write(chunk);
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      for (const row of chunk) onConflict(row);
+    }
   }
 }
 
@@ -114,7 +141,7 @@ export async function importProducts(
         weight: selected.has('weight') && filled(item.weight) ? item.weight.trim() : null,
         isActive: selected.has('isActive') && item.isActive !== null && item.isActive !== undefined ? item.isActive : true,
       });
-        byCode.set(code.toLowerCase(), {
+      byCode.set(code.toLowerCase(), {
         id: -1,
         code,
         category: selected.has('category') && item.category ? item.category : 'blanket',
@@ -141,10 +168,14 @@ export async function importProducts(
     updated += 1;
   }
 
-  for (let index = 0; index < inserts.length; index += 8) {
-    await db.insert(products).values(inserts.slice(index, index + 8));
-  }
-  await runStatements(updates);
+  await insertInChunks(inserts, (chunk) => db.insert(products).values(chunk), (row) => {
+    created -= 1;
+    errors.push({ code: row.code, message: 'كود الصنف مسجّل مسبقاً لمنتج آخر' });
+  });
+  await runStatements(updates, () => {
+    updated -= 1;
+    errors.push({ code: '—', message: 'كود الصنف مسجّل مسبقاً لمنتج آخر' });
+  });
   return { created, updated, errors };
 }
 
@@ -209,10 +240,14 @@ export async function importCustomers(
     }
   }
 
-  for (let index = 0; index < customerInserts.length; index += 8) {
-    await db.insert(customers).values(customerInserts.slice(index, index + 8));
-  }
-  await runStatements(customerUpdates);
+  await insertInChunks(customerInserts, (chunk) => db.insert(customers).values(chunk), (row) => {
+    created -= 1;
+    errors.push({ code: row.clientCode, message: 'كود العميل مسجّل مسبقاً لعميل آخر' });
+  });
+  await runStatements(customerUpdates, () => {
+    updated -= 1;
+    errors.push({ code: '—', message: 'كود العميل مسجّل مسبقاً لعميل آخر' });
+  });
 
   const refreshed = await db.select({ id: customers.id, clientCode: customers.clientCode }).from(customers).all();
   const idsByCode = new Map(refreshed.map((row) => [row.clientCode.toLowerCase(), row.id]));
@@ -263,9 +298,13 @@ export async function importCustomers(
     }
   }
 
-  for (let index = 0; index < merchantInserts.length; index += 8) {
-    await db.insert(subMerchants).values(merchantInserts.slice(index, index + 8));
-  }
-  await runStatements(merchantUpdates);
+  await insertInChunks(merchantInserts, (chunk) => db.insert(subMerchants).values(chunk), (row) => {
+    created -= 1;
+    errors.push({ code: row.name, message: 'تعذر حفظ التاجر لتعارضه مع سجل موجود' });
+  });
+  await runStatements(merchantUpdates, () => {
+    updated -= 1;
+    errors.push({ code: '—', message: 'تعذر تحديث التاجر لتعارضه مع سجل موجود' });
+  });
   return { created, updated, errors };
 }

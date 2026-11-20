@@ -16,6 +16,18 @@ export const cacheVersions = sqliteTable('cache_versions', {
   version: integer('version').notNull().default(1),
 });
 
+export const loginRateLimits = sqliteTable(
+  'login_rate_limits',
+  {
+    key: text('key').primaryKey(),
+    attempts: integer('attempts').notNull().default(0),
+    firstAttemptAt: integer('first_attempt_at').notNull(),
+    lockedUntil: integer('locked_until'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [index('login_rate_limits_updated_at_idx').on(table.updatedAt)],
+);
+
 export const systemSettings = sqliteTable('system_settings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   companyName: text('company_name').notNull().default('نظام إدارة المبيعات'),
@@ -195,6 +207,12 @@ export const clientOrders = sqliteTable(
     totalCartons: integer('total_cartons').notNull().default(0),
     totalPieces: integer('total_pieces').notNull().default(0),
     totalWeightKg: real('total_weight_kg').notNull().default(0),
+    fulfillmentStatus: text('fulfillment_status', { enum: ['pending', 'dispatched', 'cancelled'] })
+      .notNull()
+      .default('pending'),
+    dispatchedAt: text('dispatched_at'),
+    cancelledAt: text('cancelled_at'),
+    cancelReason: text('cancel_reason'),
     createdAt: text('created_at')
       .notNull()
       .default(sql`(CURRENT_TIMESTAMP)`),
@@ -207,6 +225,7 @@ export const clientOrders = sqliteTable(
     index('client_orders_sheet_customer_idx').on(table.dailySheetId, table.customerId),
     index('client_orders_customer_id_idx').on(table.customerId),
     index('client_orders_sub_merchant_id_idx').on(table.subMerchantId),
+    index('idx_client_orders_fulfillment_sheet').on(table.fulfillmentStatus, table.dailySheetId),
   ]
 );
 
@@ -300,6 +319,8 @@ export const orderItemsRelations = relations(orderItems, ({ one }) => ({
 // ============================================================================
 // INFERRED ENTITY TYPES
 // ============================================================================
+export type LoginRateLimitRow = typeof loginRateLimits.$inferSelect;
+
 export type SystemSettingRow = typeof systemSettings.$inferSelect;
 export type NewSystemSettingRow = typeof systemSettings.$inferInsert;
 
@@ -323,3 +344,63 @@ export type NewClientOrderRow = typeof clientOrders.$inferInsert;
 
 export type OrderItemRow = typeof orderItems.$inferSelect;
 export type NewOrderItemRow = typeof orderItems.$inferInsert;
+
+export const passwordResetRequests = sqliteTable(
+  'password_reset_requests',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash'),
+    status: text('status', { enum: ['pending', 'issued', 'used', 'revoked'] }).notNull().default('pending'),
+    requestedAt: integer('requested_at').notNull(),
+    expiresAt: integer('expires_at'),
+    usedAt: integer('used_at'),
+    issuedBy: integer('issued_by').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (table) => [
+    index('password_reset_requests_user_status_idx').on(table.userId, table.status),
+    index('password_reset_requests_status_requested_idx').on(table.status, table.requestedAt),
+  ],
+);
+
+export const adminRecoveryCodes = sqliteTable(
+  'admin_recovery_codes',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull(),
+    batchId: text('batch_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+    usedAt: integer('used_at'),
+  },
+  (table) => [index('admin_recovery_codes_user_used_idx').on(table.userId, table.usedAt)],
+);
+
+export type PasswordResetRequestRow = typeof passwordResetRequests.$inferSelect;
+export type AdminRecoveryCodeRow = typeof adminRecoveryCodes.$inferSelect;
+
+export const auditLogs = sqliteTable(
+  'audit_logs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    createdAt: integer('created_at').notNull(),
+    actorUserId: integer('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
+    actorUsername: text('actor_username').notNull(),
+    actorFullName: text('actor_full_name').notNull(),
+    module: text('module').notNull(),
+    action: text('action').notNull(),
+    entityType: text('entity_type'),
+    entityId: text('entity_id'),
+    entityLabel: text('entity_label'),
+    summary: text('summary').notNull(),
+    detailsJson: text('details_json'),
+    ipAddress: text('ip_address'),
+  },
+  (table) => [
+    index('idx_audit_logs_created_at').on(table.createdAt),
+    index('idx_audit_logs_module_created').on(table.module, table.createdAt),
+    index('idx_audit_logs_actor_created').on(table.actorUserId, table.createdAt),
+  ],
+);
+
+export type AuditLogRow = typeof auditLogs.$inferSelect;

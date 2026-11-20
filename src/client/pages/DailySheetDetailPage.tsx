@@ -9,6 +9,7 @@ import { useToast } from '@/client/components/ui/Toast';
 import { PrintSelectionModal } from '@/client/components/print/PrintSelectionModal';
 import { SkeletonBlock, SkeletonCard } from '@/client/components/ui/Skeleton';
 import { OrderEditorForm } from '@/client/components/orders/OrderEditorForm';
+import { ConfirmDialog } from '@/client/components/ui/ConfirmDialog';
 import { calculateOrderItemTotals, requiresPacking } from '@/shared/domain';
 import { CATEGORY_LABELS_AR, GRADE_LABELS_AR, ITEM_TYPE_LABELS_AR, ITEM_TYPES, ORDER_MODE_LABELS_AR, PRODUCT_CATEGORIES, PRODUCT_GRADES } from '@/shared/labels';
 import type {
@@ -16,6 +17,7 @@ import type {
   CustomerDTO,
   DailySheetDetailDTO,
   DeliveryType,
+  FulfillmentStatus,
   ItemType,
   OrderMode,
   ProductCategory,
@@ -40,7 +42,7 @@ const compactFieldClass =
   'h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100';
 
 const iconActionClass =
-  'inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-600 dark:text-slate-200 dark:hover:bg-slate-700';
+  'inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-600 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white';
 
 function formatCount(value: number): string {
   return value.toLocaleString('en-US');
@@ -96,14 +98,18 @@ export function DailySheetDetailPage() {
   const { user } = useAuth();
   const { notify } = useToast();
   const canEditSheet = user?.role === 'admin' || Boolean(user?.permissions.dailySheets.edit);
+  const canCloseSheet = user?.role === 'admin' || Boolean(user?.permissions.dailySheets.close);
   const canArchive = user?.role === 'admin' || Boolean(user?.permissions.dailySheets.archive);
   const canCreateOrder = user?.role === 'admin' || Boolean(user?.permissions.orders.create);
   const canEditOrder = user?.role === 'admin' || Boolean(user?.permissions.orders.edit);
-  const canDeleteOrder = user?.role === 'admin';
+  const canFulfillOrder = user?.role === 'admin' || Boolean(user?.permissions.orders.fulfillment);
+  const canCancelOrder = user?.role === 'admin' || Boolean(user?.permissions.orders.cancel);
+  const canDeleteOrder = user?.role === 'admin' || Boolean(user?.permissions.orders.delete);
   const canExport = user?.role === 'admin' || Boolean(user?.permissions.reports.exportExcel);
   const { isExporting, runExport } = useExcelExport();
   const canPrint = user?.role === 'admin' || Boolean(user?.permissions.reports.exportPdf);
   const canManageCatalog = user?.role === 'admin' || Boolean(user?.permissions.catalog.manage);
+  const canManageCustomers = user?.role === 'admin' || Boolean(user?.permissions.customers.manage);
 
   const [sheet, setSheet] = useState<DailySheetDetailDTO | null>(null);
   const [products, setProducts] = useState<ProductDTO[]>([]);
@@ -132,6 +138,11 @@ export function DailySheetDetailPage() {
   const [sheetMetaOpen, setSheetMetaOpen] = useState(false);
   const anchorOrderId = useRef<number | null>(null);
   const [orderQuery, setOrderQuery] = useState('');
+  const [fulfillmentFilter, setFulfillmentFilter] = useState<'all' | FulfillmentStatus>('all');
+  const fulfillmentLock = useRef(false);
+  const [pendingConfirm, setPendingConfirm] = useState<null | { kind: 'cancel' | 'restore'; orderId: number; label: string }>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const loadedOnce = useRef(false);
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quickMerchantOpen, setQuickMerchantOpen] = useState(false);
@@ -204,11 +215,12 @@ export function DailySheetDetailPage() {
   );
   const visibleOrders = useMemo(
     () =>
-      indexedOrders.filter(
-        ({ order, index }) =>
-          editor?.orderId === order.id || matchesOrderQuery(sheet?.sheetNumber ?? '', index, order, orderQuery)
-      ),
-    [editor?.orderId, indexedOrders, orderQuery, sheet?.sheetNumber]
+      indexedOrders.filter(({ order, index }) => {
+        const status = order.fulfillmentStatus ?? 'pending';
+        const matchesFilter = fulfillmentFilter === 'all' || status === fulfillmentFilter || editor?.orderId === order.id;
+        return matchesFilter && (editor?.orderId === order.id || matchesOrderQuery(sheet?.sheetNumber ?? '', index, order, orderQuery));
+      }),
+    [editor?.orderId, fulfillmentFilter, indexedOrders, orderQuery, sheet?.sheetNumber]
   );
 
   const selectedCustomer = customers.find((item) => item.id === Number(customerId));
@@ -345,8 +357,8 @@ export function DailySheetDetailPage() {
       savingOrderRef.current = false;
       return;
     }
-    if (!customerId || !deliveryPhone.trim() || !deliveryLocation.trim()) {
-      setFormError('العميل وهاتف التسليم والعنوان مطلوبة');
+    if (!customerId || !deliveryLocation.trim()) {
+      setFormError('العميل والعنوان مطلوبان');
       savingOrderRef.current = false;
       return;
     }
@@ -412,6 +424,31 @@ export function DailySheetDetailPage() {
     } catch (err) {
       notify(err instanceof ApiClientError ? err.message : 'تعذر حذف الطلب', 'error');
     }
+  };
+
+  const applyFulfillment = async (orderId: number, next: FulfillmentStatus, reason?: string): Promise<boolean> => {
+    if (fulfillmentLock.current) return false;
+    fulfillmentLock.current = true;
+    try {
+      await api.dailyOrders.setFulfillment(orderId, { status: next, cancelReason: reason });
+      await load();
+      return true;
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : 'تعذر تحديث حالة الطلب', 'error');
+      return false;
+    } finally {
+      fulfillmentLock.current = false;
+    }
+  };
+
+  const submitConfirm = async () => {
+    if (!pendingConfirm || confirmBusy) return;
+    setConfirmBusy(true);
+    const ok = pendingConfirm.kind === 'cancel'
+      ? await applyFulfillment(pendingConfirm.orderId, 'cancelled', cancelReason.trim())
+      : await applyFulfillment(pendingConfirm.orderId, 'pending');
+    setConfirmBusy(false);
+    if (ok) setPendingConfirm(null);
   };
 
   const exportSheet = () => {
@@ -578,12 +615,12 @@ export function DailySheetDetailPage() {
         setQuickLocation('');
         setQuickCustomerOpen(true);
       }}
-      onQuickMerchant={(query) => {
+      onQuickMerchant={canManageCustomers ? (query) => {
         setQuickName(query);
         setQuickPhone('');
         setQuickLocation('');
         setQuickMerchantOpen(true);
-      }}
+      } : undefined}
       onQuickProduct={canManageCatalog ? openQuickProduct : undefined}
       onCancel={() => {
         if (editor?.orderId) anchorOrderId.current = editor.orderId;
@@ -613,21 +650,70 @@ export function DailySheetDetailPage() {
     return <p className="py-16 text-center text-sm">تعذر العثور على الأوردر. <Link to="/daily-sheets" className="font-bold text-blue-600">العودة للقائمة</Link></p>;
   }
 
+  const fulfillmentCounts = {
+    dispatched: sheet.orders.filter((order) => order.fulfillmentStatus === 'dispatched').length,
+    cancelled: sheet.orders.filter((order) => order.fulfillmentStatus === 'cancelled').length,
+    pending: sheet.orders.filter((order) => order.fulfillmentStatus !== 'dispatched' && order.fulfillmentStatus !== 'cancelled').length,
+  };
+
+  const fulfillmentControls = (order: ClientOrderDetailDTO, index: number) => {
+    if (!canFulfillOrder && !canCancelOrder) return null;
+    const archived = sheet.status === 'archived';
+    const openSheet = sheet.status === 'open';
+    const cancelled = order.fulfillmentStatus === 'cancelled';
+    const toggleLabel = order.fulfillmentStatus === 'dispatched' ? 'متبقي' : 'تم الخروج';
+    return (
+      <div className="no-print flex flex-wrap items-center gap-1">
+        {canFulfillOrder && (
+        <button
+          type="button"
+          disabled={archived || cancelled}
+          onClick={() => void applyFulfillment(order.id, order.fulfillmentStatus === 'dispatched' ? 'pending' : 'dispatched')}
+          className="h-7 rounded-lg border border-emerald-300 bg-emerald-50 px-2 text-[11px] font-bold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-100 dark:hover:bg-emerald-900 dark:hover:text-white"
+        >
+          {toggleLabel}
+        </button>
+        )}
+        {canCancelOrder && openSheet && !cancelled && (
+          <button
+            type="button"
+            onClick={() => {
+              setCancelReason('');
+              setPendingConfirm({ kind: 'cancel', orderId: order.id, label: `${sheet.sheetNumber}/${index} — ${order.customerName}` });
+            }}
+            className="h-7 rounded-lg border border-red-300 bg-white px-2 text-[11px] font-bold text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100 dark:hover:bg-red-950/70 dark:hover:text-white"
+          >
+            إلغاء الطلب
+          </button>
+        )}
+        {canCancelOrder && openSheet && cancelled && (
+          <button
+            type="button"
+            onClick={() => setPendingConfirm({ kind: 'restore', orderId: order.id, label: `${sheet.sheetNumber}/${index} — ${order.customerName}` })}
+            className="h-7 rounded-lg border border-slate-300 bg-white px-2 text-[11px] font-bold text-slate-800 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700 dark:hover:text-white"
+          >
+            استرجاع الطلب
+          </button>
+        )}
+      </div>
+    );
+  };
+
   const orderActions = (order: ClientOrderDetailDTO, variant: 'labels' | 'icons' = 'labels') => (
     !locked && (
       <div className={variant === 'icons' ? 'no-print inline-flex items-center rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800' : 'no-print flex flex-wrap items-center gap-1'}>
         {canEditOrder && (
-          <button type="button" title="Edit" aria-label="تعديل" onClick={() => openEdit(order)} className={variant === 'icons' ? iconActionClass : 'inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'}>
+          <button type="button" title="Edit" aria-label="تعديل" onClick={() => openEdit(order)} className={variant === 'icons' ? iconActionClass : 'inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-700 dark:hover:text-white'}>
             <Pencil className="h-3.5 w-3.5" />{variant === 'labels' && 'تعديل'}
           </button>
         )}
         {canCreateOrder && (
-          <button type="button" title="Duplicate" aria-label="تكرار" onClick={() => duplicateOrder(order)} className={variant === 'icons' ? iconActionClass : 'inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'}>
+          <button type="button" title="Duplicate" aria-label="تكرار" onClick={() => duplicateOrder(order)} className={variant === 'icons' ? iconActionClass : 'inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-700 dark:hover:text-white'}>
             <Copy className="h-3.5 w-3.5" />{variant === 'labels' && 'تكرار'}
           </button>
         )}
-        {canDeleteOrder && (
-          <button type="button" title="Delete" aria-label="حذف" onClick={() => void removeOrder(order.id)} className={variant === 'icons' ? `${iconActionClass} hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/50 dark:hover:text-red-200` : 'inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200'}>
+        {canDeleteOrder && !locked && (
+          <button type="button" title="Delete" aria-label="حذف" onClick={() => void removeOrder(order.id)} className={variant === 'icons' ? `${iconActionClass} hover:bg-red-50 hover:text-red-700 dark:hover:!bg-red-950/70 dark:hover:!text-red-200` : 'inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-red-950/70 dark:hover:text-red-200'}>
             <Trash2 className="h-3.5 w-3.5" />{variant === 'labels' && 'حذف'}
           </button>
         )}
@@ -647,15 +733,35 @@ export function DailySheetDetailPage() {
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${sheet.status === 'open' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-200' : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200'}`}>
                 {sheet.status === 'open' ? 'مفتوح' : sheet.status === 'closed' ? 'مغلق' : 'مؤرشف'}
               </span>
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-200">خرج {fulfillmentCounts.dispatched}</span>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-950/70 dark:text-amber-100">متبقي {fulfillmentCounts.pending}</span>
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-bold text-red-800 dark:bg-red-950/70 dark:text-red-200">ملغي {fulfillmentCounts.cancelled}</span>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1">
+              {([
+                ['all', 'الكل'],
+                ['pending', 'متبقي'],
+                ['dispatched', 'تم الخروج'],
+                ['cancelled', 'ملغي'],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setFulfillmentFilter(value)}
+                  className={`h-7 rounded-lg px-2 text-[11px] font-bold ${fulfillmentFilter === value ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700 dark:hover:text-white'}`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
             {sheet.notes ? <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{sheet.notes}</p> : null}
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              {canEditSheet && (
+              {(canEditSheet || canCloseSheet || canArchive) && (
                 <button type="button" onClick={() => setSheetMetaOpen((open) => !open)} className="h-8 rounded-lg border border-slate-300 px-2.5 text-xs font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200">
                   تعديل بيانات الشيت
                 </button>
               )}
-              {canEditSheet && sheet.status !== 'archived' && (
+              {canCloseSheet && sheet.status !== 'archived' && (
                 <button type="button" disabled={isSaving} onClick={() => void toggleClosed()} className="h-8 rounded-lg border border-slate-300 px-2.5 text-xs font-bold text-slate-800 disabled:opacity-60 dark:border-slate-700 dark:text-slate-100">
                   {sheet.status === 'closed' ? 'إعادة فتح الأوردر' : 'إغلاق الأوردر'}
                 </button>
@@ -663,7 +769,7 @@ export function DailySheetDetailPage() {
             </div>
           </div>
           <div className="inline-flex flex-wrap items-center self-start overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-xs font-medium text-slate-600 lg:shrink-0 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-            <span className="tabular-nums px-3 py-1.5">الطلبات: {formatCount(sheet.orders.length)}</span>
+            <span className="tabular-nums px-3 py-1.5">الطلبات: {formatCount(sheet.orders.length - fulfillmentCounts.cancelled)}</span>
             <span className="h-4 w-px bg-slate-200 dark:bg-slate-700" />
             <span className="tabular-nums px-3 py-1.5">الكراتين: {formatCount(sheet.totalCartons)}</span>
             <span className="h-4 w-px bg-slate-200 dark:bg-slate-700" />
@@ -672,23 +778,23 @@ export function DailySheetDetailPage() {
             <span className="tabular-nums px-3 py-1.5">الوزن: {formatCount(sheet.totalWeightKg)} كجم</span>
           </div>
         </div>
-        {sheetMetaOpen && canEditSheet && (
+        {sheetMetaOpen && (canEditSheet || canCloseSheet || canArchive) && (
           <div className="mt-3 grid grid-cols-1 items-end gap-2 border-t border-slate-200 pt-3 md:grid-cols-12 dark:border-slate-800">
             <label className="text-[11px] font-medium text-slate-500 md:col-span-2 dark:text-slate-400">رقم الأوردر
-              <input dir="ltr" value={sheetNumber} disabled={locked} onChange={(event) => setSheetNumber(event.target.value)} className={`${compactFieldClass} mt-1 text-left`} />
+              <input dir="ltr" value={sheetNumber} disabled={locked || !canEditSheet} onChange={(event) => setSheetNumber(event.target.value)} className={`${compactFieldClass} mt-1 text-left`} />
             </label>
             <label className="text-[11px] font-medium text-slate-500 md:col-span-2 dark:text-slate-400">التاريخ
-              <input dir="ltr" type="date" value={sheetDate} disabled={locked} onChange={(event) => setSheetDate(event.target.value)} className={`${compactFieldClass} mt-1 text-left`} />
+              <input dir="ltr" type="date" value={sheetDate} disabled={locked || !canEditSheet} onChange={(event) => setSheetDate(event.target.value)} className={`${compactFieldClass} mt-1 text-left`} />
             </label>
             <label className="text-[11px] font-medium text-slate-500 md:col-span-2 dark:text-slate-400">الحالة
-              <select value={status} disabled={!canArchive && status === 'open'} onChange={(event) => setStatus(event.target.value as 'open' | 'closed' | 'archived')} className={`${compactFieldClass} mt-1`}>
-                <option value="open">مفتوح</option>
-                <option value="closed">مغلق</option>
+              <select value={status} disabled={!canCloseSheet && !canArchive} onChange={(event) => setStatus(event.target.value as 'open' | 'closed' | 'archived')} className={`${compactFieldClass} mt-1`}>
+                <option value="open" disabled={status === 'archived' ? !canArchive : status === 'closed' && !canCloseSheet}>مفتوح</option>
+                <option value="closed" disabled={status === 'archived' ? !canArchive : !canCloseSheet && status !== 'closed'}>مغلق</option>
                 <option value="archived" disabled={!canArchive && status !== 'archived'}>مؤرشف</option>
               </select>
             </label>
             <label className="text-[11px] font-medium text-slate-500 md:col-span-4 dark:text-slate-400">ملاحظات
-              <input value={notes} disabled={locked} onChange={(event) => setNotes(event.target.value)} className={`${compactFieldClass} mt-1`} />
+              <input value={notes} disabled={locked || !canEditSheet} onChange={(event) => setNotes(event.target.value)} className={`${compactFieldClass} mt-1`} />
             </label>
             <button type="button" disabled={isSaving} onClick={() => void saveSheet()} className="h-9 rounded-lg bg-blue-600 px-3 text-xs font-bold text-white disabled:opacity-60 md:col-span-2">حفظ</button>
           </div>
@@ -715,12 +821,12 @@ export function DailySheetDetailPage() {
               </button>
             )}
             {canPrint && (
-              <button type="button" onClick={() => setPrintOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+              <button type="button" onClick={() => setPrintOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-700 dark:hover:text-white">
                 <Printer className="h-3.5 w-3.5" />طباعة
               </button>
             )}
             {canExport && (
-              <button type="button" disabled={isExporting} onClick={exportSheet} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-800 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+              <button type="button" disabled={isExporting} onClick={exportSheet} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-800 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-emerald-300 dark:hover:border-emerald-600 dark:hover:bg-emerald-950 dark:hover:text-emerald-100">
                 <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-300" />Excel
               </button>
             )}
@@ -741,7 +847,7 @@ export function DailySheetDetailPage() {
                 key={order.id}
                 data-order-anchor={order.id}
                 data-order-editor={editing ? order.id : undefined}
-                className={editing ? undefined : 'overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-2xs transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900'}
+                className={editing ? undefined : `overflow-hidden rounded-xl border shadow-2xs transition-shadow hover:shadow-md ${order.fulfillmentStatus === 'cancelled' ? 'border-red-200 bg-red-50/70 dark:border-red-900/70 dark:bg-red-950/30' : 'border-slate-200/90 bg-white dark:border-slate-800 dark:bg-slate-900'}`}
               >
                 {editing ? (
                   renderEditor('تعديل الطلب واستبدال الأصناف')
@@ -752,6 +858,9 @@ export function DailySheetDetailPage() {
                         <span dir="ltr" className="rounded-md bg-blue-600 px-2.5 py-0.5 font-mono text-xs font-bold text-white">{sheet.sheetNumber}/{index}</span>
                         <span className="text-sm font-bold text-slate-900 dark:text-white">{order.customerName}</span>
                         <span dir="ltr" className="rounded bg-slate-200/80 px-1.5 py-0.5 font-mono text-xs text-slate-600 dark:bg-slate-900 dark:text-slate-300">{order.customerCode}</span>
+                        <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-bold ${order.fulfillmentStatus === 'dispatched' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-200' : order.fulfillmentStatus === 'cancelled' ? 'bg-red-600 text-white dark:bg-red-700 dark:text-red-50' : 'bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-100'}`}>
+                          {order.fulfillmentStatus === 'dispatched' ? 'تم الخروج' : order.fulfillmentStatus === 'cancelled' ? 'ملغي' : 'متبقي'}
+                        </span>
                         <span className="text-slate-300 dark:text-slate-600" aria-hidden="true">•</span>
                         <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${order.deliveryType === 'sub_merchant' ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200' : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'}`}>{deliveryLabel(order)}</span>
                         <span className="text-xs text-slate-600 dark:text-slate-300">
@@ -760,6 +869,7 @@ export function DailySheetDetailPage() {
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
+                        {fulfillmentControls(order, index)}
                         <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">{orderSubtotalLabel(order)}</span>
                         {orderActions(order, 'icons')}
                       </div>
@@ -818,6 +928,36 @@ export function DailySheetDetailPage() {
         </div>
       )}
       <PrintSelectionModal open={printOpen} initialSheetId={sheet.id} onClose={() => setPrintOpen(false)} />
+      <ConfirmDialog
+        open={pendingConfirm?.kind === 'cancel'}
+        title={`تأكيد إلغاء الطلب ${pendingConfirm?.label ?? ''}`}
+        description='سيبقى الطلب ظاهراً بشارة "ملغي" في الشاشة وكشف الطباعة، وسيُستبعد تلقائياً من الإجماليات.'
+        confirmLabel="تأكيد الإلغاء"
+        variant="danger"
+        loading={confirmBusy}
+        optionalInput={{
+          label: 'سبب الإلغاء (اختياري)',
+          placeholder: 'سبب الإلغاء',
+          value: cancelReason,
+          onChange: setCancelReason,
+        }}
+        onConfirm={() => void submitConfirm()}
+        onCancel={() => {
+          if (!confirmBusy) setPendingConfirm(null);
+        }}
+      />
+      <ConfirmDialog
+        open={pendingConfirm?.kind === 'restore'}
+        title={`تأكيد استرجاع الطلب ${pendingConfirm?.label ?? ''}`}
+        description="سيعود الطلب إلى متبقي ويُحتسب من جديد ضمن إجماليات الأوردر."
+        confirmLabel="استرجاع الطلب"
+        variant="warning"
+        loading={confirmBusy}
+        onConfirm={() => void submitConfirm()}
+        onCancel={() => {
+          if (!confirmBusy) setPendingConfirm(null);
+        }}
+      />
       {quickCustomerOpen && (
         <div className="no-print fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-slate-950/50" onClick={() => setQuickCustomerOpen(false)} />
@@ -828,7 +968,7 @@ export function DailySheetDetailPage() {
             <label className="mt-3 block text-xs font-bold">الهاتف<input dir="ltr" value={quickPhone} onChange={(event) => setQuickPhone(event.target.value)} className={`${fieldClass} mt-1.5 text-left`} /></label>
             <label className="mt-3 block text-xs font-bold">العنوان<input value={quickLocation} onChange={(event) => setQuickLocation(event.target.value)} className={`${fieldClass} mt-1.5`} /></label>
             <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => setQuickCustomerOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold dark:border-slate-700">إلغاء</button>
+              <button type="button" onClick={() => setQuickCustomerOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إلغاء</button>
               <button type="submit" className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">حفظ واختيار</button>
             </div>
           </form>
@@ -886,7 +1026,7 @@ export function DailySheetDetailPage() {
               </label>
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => setQuickProductOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold dark:border-slate-700">إلغاء</button>
+              <button type="button" onClick={() => setQuickProductOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إلغاء</button>
               <button type="submit" disabled={quickProductSaving} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60">حفظ واختيار</button>
             </div>
           </form>
@@ -901,7 +1041,7 @@ export function DailySheetDetailPage() {
             <label className="mt-3 block text-xs font-bold">الهاتف<input dir="ltr" value={quickPhone} onChange={(event) => setQuickPhone(event.target.value)} className={`${fieldClass} mt-1.5 text-left`} /></label>
             <label className="mt-3 block text-xs font-bold">المكان<input value={quickLocation} onChange={(event) => setQuickLocation(event.target.value)} className={`${fieldClass} mt-1.5`} /></label>
             <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => setQuickMerchantOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold dark:border-slate-700">إلغاء</button>
+              <button type="button" onClick={() => setQuickMerchantOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إلغاء</button>
               <button type="submit" className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">حفظ وتعبئة التسليم</button>
             </div>
           </form>

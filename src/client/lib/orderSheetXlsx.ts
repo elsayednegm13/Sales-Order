@@ -1,6 +1,6 @@
 import type { Alignment, Borders, Worksheet } from 'exceljs';
 import { sanitizeExcelCell } from '@/client/lib/excelSanitize';
-import { cartonsPrintValue, packingPrintValue, weightNotesValue, type SheetPrintModel } from '@/client/lib/orderSheetLayout';
+import { activeOrderTotals, cartonsPrintValue, packingPrintValue, weightNotesValue, type SheetPrintModel } from '@/client/lib/orderSheetLayout';
 import type { ClientOrderDetailDTO } from '@/shared/types';
 
 const COLUMNS = 13;
@@ -110,7 +110,11 @@ export async function buildOrderSheetXlsx(model: SheetPrintModel): Promise<Array
         paint(ws, row, 2, `${order.customerName}\n${order.customerCode}`);
         paint(ws, row, 3, order.deliveryLocation);
         paint(ws, row, 4, order.trucksCount || 1, { wrap: false });
-        paint(ws, row, 5, order.representativeName ?? '');
+        const representative = order.fulfillmentStatus === 'cancelled' ? 'ملغي' : (order.representativeName ?? '');
+        const repCell = paint(ws, row, 5, representative, { bold: order.fulfillmentStatus === 'cancelled' });
+        if (order.fulfillmentStatus === 'cancelled') {
+          repCell.font = { name: 'Tahoma', size: 10, bold: true, color: { argb: 'FFB91C1C' } };
+        }
         paint(ws, row, 12, order.warehouseRef ?? '');
         paint(ws, row, 13, partyLines(order), { text: true, wrap: order.deliveryType === 'sub_merchant' });
       } else {
@@ -130,6 +134,16 @@ export async function buildOrderSheetXlsx(model: SheetPrintModel): Promise<Array
       row += 1;
     }
   });
+
+  const totals = activeOrderTotals(orders);
+  paint(ws, row, 1, `الإجمالي (${totals.orders})`, { bold: true });
+  for (let col = 2; col <= COLUMNS; col += 1) paint(ws, row, col, '', { bold: true });
+  paint(ws, row, 9, totals.cartons, { bold: true, wrap: false });
+  paint(ws, row, 10, totals.pieces, { bold: true, wrap: false });
+  paint(ws, row, 11, totals.weight, { bold: true, wrap: false });
+  merge(ws, row, 1, row, 8);
+  ws.getRow(row).height = 22;
+  row += 1;
 
   const signStart = row;
   paint(ws, signStart, 1, 'مدير المبيعات', { bold: true, size: 12 });

@@ -1,11 +1,14 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { eq } from 'drizzle-orm';
-import { systemSettings, type SystemSettingRow } from '@/db/schema';
+import { systemSettings, users, type SystemSettingRow } from '@/db/schema';
 import type { SystemSettingsDTO } from '@/shared/types';
 import type { AppContextEnv } from '@/worker/types';
 import { requireAdmin, requireAuth } from '@/worker/middleware/auth';
 import { readJson, updateSettingsSchema } from '@/worker/schemas';
 import { bumpCacheVersions, CACHE_NAMESPACES, readVersionedCache } from '@/worker/cache';
+import { recordAuditLog } from '@/worker/services/auditLog';
+import { clientIp } from '@/worker/utils/loginRateLimit';
+import { extractAuthToken, verifyUserToken } from '@/worker/utils/jwt';
 
 export const settingsRoutes = new Hono<AppContextEnv>();
 
@@ -52,6 +55,34 @@ function mapSettingsRowToDTO(row: SystemSettingRow): SystemSettingsDTO {
     startingOrderNumber: row.startingOrderNumber,
     updatedAt: row.updatedAt,
   };
+}
+
+function mapPublicSettings(row: SystemSettingRow) {
+  return {
+    id: row.id,
+    companyName: row.companyName,
+    logoUrl: row.logoUrl,
+    faviconUrl: row.faviconUrl,
+    updatedAt: row.updatedAt,
+  };
+}
+
+async function hasValidSession(c: Context<AppContextEnv>): Promise<boolean> {
+  try {
+    const token = extractAuthToken(c);
+    if (!token) return false;
+    const payload = await verifyUserToken(c, token);
+    const userId = Number.parseInt(payload?.sub ?? '', 10);
+    if (!payload || !Number.isFinite(userId) || typeof payload.tv !== 'number') return false;
+    const row = await c.get('db')
+      .select({ isActive: users.isActive, tokenVersion: users.tokenVersion })
+      .from(users)
+      .where(eq(users.id, userId))
+      .get();
+    return Boolean(row?.isActive && row.tokenVersion === payload.tv);
+  } catch {
+    return false;
+  }
 }
 
 function extractManagedAssetKey(assetUrl: string | null | undefined): string | null {
@@ -104,9 +135,10 @@ async function getOrCreateSingletonSettings(c: {
 // Public endpoint so Login screen & White-Labeling hook receive branding on boot
 settingsRoutes.get('/', async (c) => {
   const db = c.get('db');
-  const settings = await readVersionedCache(db, CACHE_NAMESPACES.settings, 'public', async () => {
+  const authenticated = await hasValidSession(c);
+  const settings = await readVersionedCache(db, CACHE_NAMESPACES.settings, authenticated ? 'session' : 'public', async () => {
     const row = await getOrCreateSingletonSettings(c);
-    return mapSettingsRowToDTO(row);
+    return authenticated ? mapSettingsRowToDTO(row) : mapPublicSettings(row);
   });
   return c.json({ settings });
 });
@@ -157,12 +189,36 @@ settingsRoutes.put('/', requireAuth, requireAdmin, async (c) => {
     .where(eq(systemSettings.id, 1));
 
   const updated = await getOrCreateSingletonSettings(c);
+  const user = c.get('user');
+  await recordAuditLog(db, {
+    actorUserId: user.id,
+    actorUsername: user.username,
+    actorFullName: user.fullName,
+    module: 'settings',
+    action: 'update_settings',
+    entityType: 'settings',
+    entityId: 1,
+    entityLabel: companyName,
+    summary: 'تعديل إعدادات النظام',
+    details: {
+      ...(current.companyName !== companyName ? { companyName: { from: current.companyName, to: companyName } } : {}),
+      ...(current.startingOrderNumber !== parsedStartNum ? { startingOrderNumber: { from: current.startingOrderNumber, to: parsedStartNum } } : {}),
+      ...(current.logoUrl !== nextLogoUrl ? { logoChanged: true } : {}),
+      ...(current.faviconUrl !== nextFaviconUrl ? { faviconChanged: true } : {}),
+    },
+    ipAddress: clientIp((name) => c.req.header(name)),
+  });
   await bumpCacheVersions(db, [CACHE_NAMESPACES.settings, CACHE_NAMESPACES.nextSheet, CACHE_NAMESPACES.dashboard]);
   return c.json({ settings: mapSettingsRowToDTO(updated) });
 });
 
 // Admin-only: Upload logo or favicon to Cloudflare R2 and persist URL
 settingsRoutes.post('/upload', requireAuth, requireAdmin, async (c) => {
+  const declaredLength = Number(c.req.header('content-length') ?? '');
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+    return c.json({ error: 'حجم الملف يتجاوز الحد الأقصى المسموح به (5 ميجابايت)', code: 'PAYLOAD_TOO_LARGE' }, 413);
+  }
+
   let formData: FormData;
   try {
     formData = await c.req.formData();
@@ -228,6 +284,20 @@ settingsRoutes.post('/upload', requireAuth, requireAdmin, async (c) => {
     .where(eq(systemSettings.id, 1));
 
   const updated = await getOrCreateSingletonSettings(c);
+  const user = c.get('user');
+  await recordAuditLog(db, {
+    actorUserId: user.id,
+    actorUsername: user.username,
+    actorFullName: user.fullName,
+    module: 'settings',
+    action: 'upload_branding',
+    entityType: 'settings',
+    entityId: 1,
+    entityLabel: rawType === 'logo' ? 'شعار الشركة' : 'أيقونة المتصفح',
+    summary: rawType === 'logo' ? 'رفع شعار الشركة' : 'رفع أيقونة المتصفح',
+    details: { brandingType: rawType, publicUrl },
+    ipAddress: clientIp((name) => c.req.header(name)),
+  });
   await bumpCacheVersions(db, [CACHE_NAMESPACES.settings]);
   return c.json({
     url: publicUrl,

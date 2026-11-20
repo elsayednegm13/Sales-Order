@@ -8,6 +8,7 @@ export interface Env {
   JWT_SECRET?: string;
   APP_ENV?: string;
   ALLOW_DEV_SEED?: string;
+  DEV_SEED_ADMIN_PASSWORD?: string;
 }
 
 export interface AuthJwtPayload {

@@ -17,7 +17,7 @@ export class ServerConfigError extends Error {
   }
 }
 
-function resolveJwtSecret(c: Context<AppContextEnv>): string {
+export function resolveJwtSecret(c: Context<AppContextEnv>): string {
   const configured = c.env.JWT_SECRET?.trim() ?? '';
   if (configured.length < MIN_SECRET_LENGTH) {
     const where = c.env.APP_ENV === 'production' ? 'الإنتاج' : 'بيئة التطوير (.dev.vars)';

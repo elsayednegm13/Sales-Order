@@ -89,3 +89,46 @@ export async function verifyPassword(
     return false;
   }
 }
+
+const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+export function generateUnambiguousCode(groups: number, groupLength: number): string {
+  const parts: string[] = [];
+  for (let group = 0; group < groups; group += 1) {
+    const bytes = crypto.getRandomValues(new Uint8Array(groupLength));
+    let text = '';
+    for (let index = 0; index < groupLength; index += 1) {
+      text += RECOVERY_ALPHABET[bytes[index] & 31];
+    }
+    parts.push(text);
+  }
+  return parts.join('-');
+}
+
+export function normalizeRecoveryCode(input: string): string {
+  return input.replace(/[\s-]+/g, '').toUpperCase();
+}
+
+export async function hashRecoveryCode(secret: string, context: string, normalizedCode: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(`${context}:${normalizedCode}`));
+  return bytesToHex(new Uint8Array(signature));
+}
+
+export function verifyRecoveryCodeHash(expectedHex: string, candidateHex: string): boolean {
+  try {
+    const expected = hexToBytes(expectedHex);
+    const candidate = hexToBytes(candidateHex);
+    if (expected.length !== candidate.length) return false;
+    return timingSafeEqual(expected, candidate);
+  } catch {
+    return false;
+  }
+}

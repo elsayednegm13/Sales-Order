@@ -23,7 +23,7 @@ export function DailySheetsPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const canCreate = user?.role === 'admin' || Boolean(user?.permissions.dailySheets.create);
-  const canDelete = user?.role === 'admin';
+  const canDelete = user?.role === 'admin' || Boolean(user?.permissions.dailySheets.delete);
   const canExport = user?.role === 'admin' || Boolean(user?.permissions.reports.exportExcel);
   const canPrint = user?.role === 'admin' || Boolean(user?.permissions.reports.exportPdf);
 
@@ -120,6 +120,16 @@ export function DailySheetsPage() {
   };
 
   const remove = async (sheet: DailySheetListItemDTO) => {
+    if (sheet.status === 'closed' || sheet.status === 'archived') {
+      notify('لا يمكن حذف أوردر مغلق أو مؤرشف. أعد فتحه أولاً.', 'error');
+      setConfirmId(null);
+      return;
+    }
+    if (sheet.orderCount > 0) {
+      notify(`لا يمكن حذف أوردر اليوم لوجود ${sheet.orderCount} طلب مسجل بداخله؛ احذف الطلبات أولاً أو أرشف الأوردر`, 'error');
+      setConfirmId(null);
+      return;
+    }
     try {
       await api.dailySheets.remove(sheet.id);
       setConfirmId(null);
@@ -191,13 +201,13 @@ export function DailySheetsPage() {
                 { header: 'القطع', width: 12, accessor: (row) => row.totalPieces },
                 { header: 'عدد الطلبات', width: 14, accessor: (row) => row.orderCount },
               ],
-            }))} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 px-3 text-xs font-bold text-slate-800 disabled:opacity-50 dark:border-slate-700 dark:text-slate-100">
+            }))} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 px-3 text-xs font-bold text-slate-800 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-emerald-300 dark:hover:border-emerald-600 dark:hover:bg-emerald-950 dark:hover:text-emerald-100">
               <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
               تصدير Excel
             </button>
           )}
           {canPrint && (
-            <button type="button" onClick={() => setPrintOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 px-3 text-xs font-bold text-slate-800 dark:border-slate-700 dark:text-slate-100">
+            <button type="button" onClick={() => setPrintOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 px-3 text-xs font-bold text-slate-800 dark:border-slate-700 dark:text-slate-100 dark:hover:bg-slate-700 dark:hover:text-white">
               <Printer className="h-4 w-4" />
               طباعة
             </button>
@@ -247,11 +257,11 @@ export function DailySheetsPage() {
                 <td className="px-3 py-2 font-semibold tabular-nums text-slate-900 dark:text-white">{sheet.totalPieces.toLocaleString('en-US')}</td>
                 <td className="no-print px-4 py-2">
                   <div className="flex items-center justify-end gap-1.5">
-                    <Link to={`/daily-sheets/${sheet.id}`} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold dark:border-slate-700">عرض وتعديل</Link>
+                    <Link to={`/daily-sheets/${sheet.id}`} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">عرض وتعديل</Link>
                     {canDelete && (confirmId === sheet.id ? (
                       <button type="button" onClick={() => void remove(sheet)} className="rounded bg-red-600 px-2 py-1 text-[11px] font-bold text-white">تأكيد الحذف</button>
                     ) : (
-                      <button type="button" onClick={() => setConfirmId(sheet.id)} className="rounded-lg border border-slate-200 p-1.5 text-slate-500 dark:border-slate-700" aria-label={`حذف الأوردر ${sheet.sheetNumber}`}>
+                      <button type="button" onClick={() => setConfirmId(sheet.id)} className="rounded-lg border border-slate-200 p-1.5 text-slate-500 dark:border-slate-700 dark:hover:bg-red-950/70 dark:hover:text-red-200" aria-label={`حذف الأوردر ${sheet.sheetNumber}`}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     ))}
@@ -281,7 +291,7 @@ export function DailySheetsPage() {
               <textarea value={notes} onChange={(event) => setNotes(event.target.value)} className={`${fieldClass} mt-1.5`} rows={2} />
             </label>
             <div className="mt-5 flex justify-end gap-2">
-              <button type="button" onClick={() => setModalOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold dark:border-slate-700">إلغاء</button>
+              <button type="button" onClick={() => setModalOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إلغاء</button>
               <button type="submit" disabled={isSaving} className="rounded-xl bg-blue-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-60">فتح الأوردر</button>
             </div>
           </form>

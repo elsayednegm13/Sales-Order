@@ -1,0 +1,60 @@
+---
+description: Strict engineering, security, UX precision, real browser verification, RBAC safety, and mandatory audit reporting standards for the Sales Order ERP system.
+alwaysApply: true
+---
+
+# Sales Order ERP — Mandatory Engineering & Precision Rules
+
+These rules are NON-NEGOTIABLE for every task, bug fix, refactor, or feature in this repository. Never bypass or abbreviate any rule.
+
+## 1. Absolute Non-Negotiable Guardrails
+- **Minimum Password Length:** NEVER raise or alter the minimum password length (`min(6)` in `src/worker/schemas.ts`) unless explicitly instructed in writing by the user.
+- **Database & Migrations Safety:**
+  - NEVER destructively modify, drop, or alter existing D1 tables or existing migration files without explicit written approval.
+  - Prefer standalone additive tables (`CREATE TABLE IF NOT EXISTS`) with explicit sequential migration numbering.
+  - Before applying ANY remote D1 migration, ALWAYS run the production backup script first:
+    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backup-prod-db.ps1`
+- **Package Stability:** NEVER remove, replace, or upgrade packages in `package.json` (including `xlsx` and `exceljs`) without explicit approval and verified end-to-end compatibility.
+- **Bundle Performance:** After every build, verify `dist/index.html` contains ZERO `xlsx` or `exceljs` preload/modulepreload links.
+- **Zero Production Pollution:** NEVER write test records, create test accounts, or trigger failed login/rate-limit attempts against the live production URL (`https://sales-order-system.elsayedmohamed963.workers.dev`) or remote production D1/R2. Production checks MUST be 100% read-only (`GET /api/health`, `GET /`, security headers).
+- **Zero Feature Regressions:** Preserve all agreed features intact: Daily Sheets, Order Creation/Editing, `SearchCombobox` Portal floating menus (`position: fixed`), Reports (all tabs), A4 Printing, ExcelJS exports, Bulk Import, Branding Logo, D1 Login Rate Limiting, Password Recovery (Employee + Admin 8 Recovery Codes), and HTTP Security Headers (`HSTS`, `CSP`, `nosniff`, `Permissions-Policy`).
+
+## 2. UI/UX Clarity & RTL Precision Standards
+- **No Hidden Primary Flows:** Any user-facing step or primary action MUST be unmistakably visible and styled with proper button/tab hierarchy — NEVER bury an essential step behind a tiny unstyled text link (e.g., `text-xs`) or leave the user stranded after submitting a step without an automatic transition or clear next-step guidance.
+- **Dual-Theme Parity:** Every new or edited UI element MUST be verified for contrast, borders, and readability in BOTH Light mode and Dark mode, with proper Arabic RTL layout and `dir="ltr"` for codes/numbers where appropriate.
+- **Security Hygiene in UI:** NEVER place secrets, recovery codes, or tokens in URL query parameters. Keep `CSP` clean with zero inline script violations.
+
+## 3. Mandatory Pre-Deploy Verification Gate (Local `http://127.0.0.1:8787`)
+NEVER run `npm run deploy` until ALL of the following pass locally:
+1. **Static Checks:** `npm run typecheck && npm run build` pass with zero errors, and `dist/index.html` is confirmed free of `xlsx`/`exceljs` preloads.
+2. **Real Browser UI Click-Through (Strictly Required for UI Tasks):**
+   - For ANY feature or fix touching the frontend, API-only (`curl`/script) testing is **INSUFFICIENT AND FORBIDDEN as sole proof**.
+   - Execute the complete real user journey via actual browser clicks, form typing, and navigation on `http://127.0.0.1:8787` in BOTH Light and Dark modes.
+   - Verify ZERO browser console errors and ZERO CSP violations during the entire journey.
+   - If any step is unclear, clipped, unresponsive, or hidden in the browser, treat the test as FAILED and fix it before deploying.
+3. **Mandatory Local Cleanup:** Delete every temporary test account and test row created in local D1 (including `login_rate_limits`, `password_reset_requests`, `admin_recovery_codes`, or test orders) and confirm counts return to baseline before finishing.
+
+## 4. Mandatory Structured Delivery Report (In Arabic)
+For every implementation task, ALWAYS respond in Arabic with a complete, factual forensic report containing ALL 5 sections (never vague summaries):
+1. **ملخص التعديلات بالملف والسطر:** Exact files edited, exact `file:line` ranges, and every new/changed Arabic label, button, state transition, or route.
+2. **رحلة المستخدم خطوة بخطوة:** Exact visible click path from start to finish proving zero hidden steps.
+3. **إثبات الاختبار الفعلي عبر المتصفح (UI Click-Through):** Concrete results of real browser clicks in Light & Dark modes, console/CSP error count (`0`), and confirmation of local D1 test data cleanup (`0` rows left).
+4. **فحص عدم التأثير على النظام (Regression & Guardrails):** Explicit confirmation that untouched systems (`min(6)` password rule, existing D1 tables, `package.json`, `dist/index.html` preloads, and core ERP modules) remain intact.
+5. **حالة النشر الحي (إن طُلب النشر):** Backup file path/size (if DB migrated), live deployment Version ID, and read-only `GET /api/health` + security headers verification.
+
+## 5. RBAC & Granular Permissions Safety Rules
+When auditing, expanding, or customizing user roles and permissions:
+1. **Strict Scope Discipline:** ONLY add, rename, or modify permission keys explicitly approved by the user after a Read-Only Audit. Never invent unrequested permissions or silently change existing role behavior.
+2. **100% Backward Compatibility for Existing D1 Users:**
+   - NEVER alter or break the existing `users` table schema or crash when reading older `users.permissions` JSON strings stored in production D1.
+   - Use a deterministic normalization/merge layer so missing new keys in legacy user records default safely (ALWAYS `false` / denied by default for sensitive permissions; preserve existing behavior for standard permissions).
+   - Existing `admin` accounts MUST retain full operational access and NEVER risk self-lockout from User Management, Settings, or Recovery Controls.
+3. **Server-Side Enforcement is Mandatory (Zero Frontend-Only Guards):**
+   - Hiding a button, tab, or menu item in React is purely UX — EVERY permission (especially sensitive ones) MUST be enforced server-side in Cloudflare Worker routes returning `403 Forbidden` with a clear Arabic message when denied.
+4. **Immediate Effect of Revoked Permissions:**
+   - Editing or revoking a user's permissions MUST take effect immediately (via fresh DB permission loading on authenticated requests and/or incrementing `tokenVersion` when revoking permissions or downgrading roles) so stale JWT cookies can NEVER execute revoked actions.
+5. **Mandatory Positive + Negative Verification:**
+   - Every permission added or modified MUST be tested locally (`http://127.0.0.1:8787`) on a temporary customized user for BOTH states:
+     * **Granted:** UI element is visible and browser click action succeeds (`200`).
+     * **Revoked:** UI element is hidden/disabled AND direct backend request returns `403 Forbidden`.
+   - Clean up all temporary test users and rows afterward (`0` remaining).

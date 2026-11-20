@@ -10,6 +10,30 @@ export const ORDER_SHEET_COLUMNS = 13;
 const CELL =
   'border:1px solid #000;text-align:center;vertical-align:middle;padding:3px 4px;font-size:10px;font-family:Cairo,Tahoma,sans-serif;line-height:1.35;box-sizing:border-box;';
 
+export function activeOrderTotals(orders: ClientOrderDetailDTO[]): {
+  orders: number;
+  cartons: number;
+  pieces: number;
+  weight: number;
+} {
+  return orders.reduce(
+    (sum, order) => {
+      if (order.fulfillmentStatus === 'cancelled') return sum;
+      sum.orders += 1;
+      sum.cartons += order.totalCartons;
+      sum.pieces += order.totalPieces;
+      sum.weight += order.totalWeightKg;
+      return sum;
+    },
+    { orders: 0, cartons: 0, pieces: 0, weight: 0 },
+  );
+}
+
+function representativeHtml(order: ClientOrderDetailDTO): string {
+  if (order.fulfillmentStatus === 'cancelled') return '<strong style="color:#b91c1c;">ملغي</strong>';
+  return esc(order.representativeName);
+}
+
 function esc(value: string | number | null | undefined): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -50,7 +74,10 @@ function partyHtml(order: ClientOrderDetailDTO): string {
   return phoneHtml(order.deliveryPhone);
 }
 
-export function orderSheetInnerHtml(model: SheetPrintModel): string {
+export function orderSheetInnerHtml(
+  model: SheetPrintModel,
+  branding: { companyName?: string | null; logoUrl?: string | null } = {},
+): string {
   const orders = model.orders ?? [];
   const body = orders
     .map((order, orderIndex) => {
@@ -64,7 +91,7 @@ export function orderSheetInnerHtml(model: SheetPrintModel): string {
                  <td rowspan="${span}" style="${CELL}"><div>${esc(order.customerName)}</div><div>${esc(order.customerCode)}</div></td>
                  <td rowspan="${span}" style="${CELL}">${esc(order.deliveryLocation)}</td>
                  <td rowspan="${span}" style="${CELL}">${esc(order.trucksCount || 1)}</td>
-                 <td rowspan="${span}" style="${CELL}">${esc(order.representativeName)}</td>`
+                 <td rowspan="${span}" style="${CELL}">${representativeHtml(order)}</td>`
               : '';
           const tail =
             itemIndex === 0
@@ -92,8 +119,15 @@ export function orderSheetInnerHtml(model: SheetPrintModel): string {
     })
     .join('');
 
+  const totals = activeOrderTotals(orders);
+  const companyName = branding.companyName?.trim() || '';
+  const logoUrl = branding.logoUrl?.trim() || '';
   return `
     <link rel="stylesheet" href="/fonts/cairo.css" />
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-family:Cairo,Tahoma,sans-serif;">
+      <strong style="font-size:16px;">${esc(companyName)}</strong>
+      ${logoUrl ? `<img src="${esc(logoUrl)}" alt="" style="height:40px;max-width:110px;object-fit:contain;" />` : ''}
+    </div>
     <div class="order-print-banner" style="display:flex;justify-content:space-between;border:1px solid #000;padding:6px 10px;margin-bottom:6px;font-size:14px;font-weight:700;font-family:Cairo,Tahoma,sans-serif;">
       <strong>${esc(model.sheet.sheetDate)}</strong>
       <strong>ORDERS NO ${esc(model.sheet.sheetNumber)}</strong>
@@ -132,6 +166,15 @@ export function orderSheetInnerHtml(model: SheetPrintModel): string {
         </tr>
       </thead>
       ${body}
+      <tbody style="break-inside:avoid;page-break-inside:avoid;">
+        <tr>
+          <td colspan="8" style="${CELL}font-weight:700;">الإجمالي (${totals.orders})</td>
+          <td style="${CELL}font-weight:700;">${totals.cartons}</td>
+          <td style="${CELL}font-weight:700;">${totals.pieces}</td>
+          <td style="${CELL}font-weight:700;">${totals.weight}</td>
+          <td colspan="2" style="${CELL}"></td>
+        </tr>
+      </tbody>
       <tbody class="print-signs" style="break-inside:avoid;page-break-inside:avoid;">
         <tr>
           <td colspan="4" style="${CELL}height:48px;font-size:12px;font-weight:700;">مدير المبيعات</td>

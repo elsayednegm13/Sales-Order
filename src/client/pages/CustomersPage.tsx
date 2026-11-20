@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Edit3,
   FileSpreadsheet,
@@ -25,6 +25,7 @@ interface CustomerForm {
   name: string;
   defaultPhone: string;
   defaultLocation: string;
+  representativeName: string;
 }
 
 interface MerchantForm {
@@ -33,7 +34,7 @@ interface MerchantForm {
   location: string;
 }
 
-const EMPTY_CUSTOMER: CustomerForm = { clientCode: '', name: '', defaultPhone: '', defaultLocation: '' };
+const EMPTY_CUSTOMER: CustomerForm = { clientCode: '', name: '', defaultPhone: '', defaultLocation: '', representativeName: '' };
 const EMPTY_MERCHANT: MerchantForm = { name: '', phone: '', location: '' };
 
 const fieldClass =
@@ -43,7 +44,9 @@ export function CustomersPage() {
   const { user } = useAuth();
   const { notify } = useToast();
   const canManage = Boolean(user?.role === 'admin' || user?.permissions.customers.manage);
-  const canDeleteCustomer = user?.role === 'admin';
+  const canBulkImport = Boolean(user?.role === 'admin' || user?.permissions.customers.bulkImport);
+  const canDeleteCustomer = Boolean(user?.role === 'admin' || user?.permissions.customers.delete);
+  const canDeleteSubMerchant = Boolean(user?.role === 'admin' || user?.permissions.customers.deleteSubMerchant);
   const canExport = Boolean(user?.role === 'admin' || user?.permissions.reports.exportExcel);
   const canPrint = Boolean(user?.role === 'admin' || user?.permissions.reports.exportPdf);
   const { isExporting, runExport } = useExcelExport();
@@ -66,6 +69,8 @@ export function CustomersPage() {
   const [editingMerchant, setEditingMerchant] = useState<SubMerchantDTO | null>(null);
   const [merchantError, setMerchantError] = useState<string | null>(null);
   const [isSavingMerchant, setIsSavingMerchant] = useState(false);
+  const savingCustomerRef = useRef(false);
+  const savingMerchantRef = useRef(false);
   const [confirmDeleteMerchantId, setConfirmDeleteMerchantId] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
 
@@ -122,6 +127,7 @@ export function CustomersPage() {
             name: customer.name,
             defaultPhone: customer.defaultPhone ?? '',
             defaultLocation: customer.defaultLocation ?? '',
+            representativeName: customer.representativeName ?? '',
           }
         : EMPTY_CUSTOMER
     );
@@ -131,21 +137,24 @@ export function CustomersPage() {
 
   const submitCustomer = async (event: FormEvent) => {
     event.preventDefault();
+    if (savingCustomerRef.current) return;
     if (customerForm.name.trim().length < 2) {
       setCustomerError('يرجى إدخال اسم العميل');
       return;
     }
-    setIsSavingCustomer(true);
-    setCustomerError(null);
     if (customerForm.clientCode.trim().length < 1) {
       setCustomerError('أدخل كود العميل');
       return;
     }
+    savingCustomerRef.current = true;
+    setIsSavingCustomer(true);
+    setCustomerError(null);
     const payload = {
       clientCode: customerForm.clientCode.trim(),
       name: customerForm.name.trim(),
       defaultPhone: customerForm.defaultPhone.trim() || null,
       defaultLocation: customerForm.defaultLocation.trim() || null,
+      representativeName: customerForm.representativeName.trim() || null,
     };
     try {
       if (editingCustomer) {
@@ -160,6 +169,7 @@ export function CustomersPage() {
     } catch (err) {
       setCustomerError(err instanceof ApiClientError ? err.message : 'تعذر حفظ العميل');
     } finally {
+      savingCustomerRef.current = false;
       setIsSavingCustomer(false);
     }
   };
@@ -209,11 +219,13 @@ export function CustomersPage() {
 
   const submitMerchant = async (event: FormEvent) => {
     event.preventDefault();
+    if (savingMerchantRef.current) return;
     if (!drawerCustomer) return;
     if (merchantForm.name.trim().length < 2) {
       setMerchantError('يرجى إدخال اسم التاجر');
       return;
     }
+    savingMerchantRef.current = true;
     setIsSavingMerchant(true);
     setMerchantError(null);
     const payload = {
@@ -235,6 +247,7 @@ export function CustomersPage() {
     } catch (err) {
       setMerchantError(err instanceof ApiClientError ? err.message : 'تعذر حفظ التاجر');
     } finally {
+      savingMerchantRef.current = false;
       setIsSavingMerchant(false);
     }
   };
@@ -254,13 +267,14 @@ export function CustomersPage() {
   const customerRows = customers.flatMap((customer) => {
     const merchants = customer.subMerchants ?? [];
     if (merchants.length === 0) {
-      return [[customer.clientCode, customer.name, customer.defaultPhone ?? '', customer.defaultLocation ?? '', '', '', '']];
+      return [[customer.clientCode, customer.name, customer.defaultPhone ?? '', customer.defaultLocation ?? '', customer.representativeName ?? '', '', '', '']];
     }
     return merchants.map((merchant) => [
       customer.clientCode,
       customer.name,
       customer.defaultPhone ?? '',
       customer.defaultLocation ?? '',
+      customer.representativeName ?? '',
       merchant.name,
       merchant.phone ?? '',
       merchant.location ?? '',
@@ -277,9 +291,10 @@ export function CustomersPage() {
         { header: 'اسم العميل', width: 28, accessor: (row) => row[1] },
         { header: 'الهاتف', width: 18, accessor: (row) => row[2] },
         { header: 'العنوان', width: 28, accessor: (row) => row[3] },
-        { header: 'اسم التاجر', width: 24, accessor: (row) => row[4] },
-        { header: 'هاتف التاجر', width: 18, accessor: (row) => row[5] },
-        { header: 'المكان', width: 28, accessor: (row) => row[6] },
+        { header: 'المندوب', width: 20, accessor: (row) => row[4] },
+        { header: 'اسم التاجر', width: 24, accessor: (row) => row[5] },
+        { header: 'هاتف التاجر', width: 18, accessor: (row) => row[6] },
+        { header: 'المكان', width: 28, accessor: (row) => row[7] },
       ],
     }));
   };
@@ -312,25 +327,25 @@ export function CustomersPage() {
             className="h-9 w-full rounded-lg border border-slate-300 bg-white pr-9 pl-3 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
           />
         </div>
-        <button type="button" onClick={() => { setExpandAll((value) => !value); setExpandedOverride({}); }} className="h-9 shrink-0 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+        <button type="button" onClick={() => { setExpandAll((value) => !value); setExpandedOverride({}); }} className="h-9 shrink-0 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">
           {expandAll ? 'طي الكل' : 'توسيع الكل'}
         </button>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
           {canExport && (
-            <button type="button" onClick={exportExcel} disabled={filtered.length === 0 || isExporting} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+            <button type="button" onClick={exportExcel} disabled={filtered.length === 0 || isExporting} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-emerald-300 dark:hover:border-emerald-600 dark:hover:bg-emerald-950 dark:hover:text-emerald-100">
               <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
               تصدير Excel
             </button>
           )}
           {canPrint && (
-            <button type="button" onClick={triggerPrintPdfView} disabled={filtered.length === 0} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+            <button type="button" onClick={triggerPrintPdfView} disabled={filtered.length === 0} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">
               <Printer className="h-4 w-4" />
               طباعة
             </button>
           )}
-          {canManage && (
-            <button type="button" onClick={() => setImportOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+          {canBulkImport && (
+            <button type="button" onClick={() => setImportOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">
               <FileSpreadsheet className="h-4 w-4 text-blue-600" />
               استيراد Excel
             </button>
@@ -372,8 +387,9 @@ export function CustomersPage() {
                       <label className="text-xs font-bold text-slate-700 dark:text-slate-200">اسم العميل<input required value={customerForm.name} onChange={(event) => setCustomerForm((prev) => ({ ...prev, name: event.target.value }))} className={`${fieldClass} mt-1`} /></label>
                       <label className="text-xs font-bold text-slate-700 dark:text-slate-200">الهاتف<input dir="ltr" value={customerForm.defaultPhone} onChange={(event) => setCustomerForm((prev) => ({ ...prev, defaultPhone: event.target.value }))} className={`${fieldClass} mt-1 text-left`} /></label>
                       <label className="text-xs font-bold text-slate-700 dark:text-slate-200">عنوان المخزن<input value={customerForm.defaultLocation} onChange={(event) => setCustomerForm((prev) => ({ ...prev, defaultLocation: event.target.value }))} className={`${fieldClass} mt-1`} /></label>
+                      <label className="text-xs font-bold text-slate-700 dark:text-slate-200 sm:col-span-2">المندوب<input value={customerForm.representativeName} onChange={(event) => setCustomerForm((prev) => ({ ...prev, representativeName: event.target.value }))} className={`${fieldClass} mt-1`} /></label>
                     </div>
-                    <div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setCustomerModal(false)} className="h-9 rounded-lg border px-3 text-xs font-bold dark:border-slate-700">إلغاء</button><button type="submit" disabled={isSavingCustomer} className="h-9 rounded-lg bg-blue-600 px-4 text-xs font-bold text-white disabled:opacity-60">حفظ</button></div>
+                    <div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setCustomerModal(false)} className="h-9 rounded-lg border px-3 text-xs font-bold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إلغاء</button><button type="submit" disabled={isSavingCustomer} className="h-9 rounded-lg bg-blue-600 px-4 text-xs font-bold text-white disabled:opacity-60">حفظ</button></div>
                   </form>
                 ) : (
                   <>
@@ -384,18 +400,19 @@ export function CustomersPage() {
                         <span className="text-sm font-bold text-slate-900 dark:text-white">{customer.name}</span>
                         {customer.defaultLocation ? <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200">{customer.defaultLocation}</span> : null}
                         {customer.defaultPhone ? <span dir="ltr" className="text-xs tabular-nums text-slate-600 dark:text-slate-300">{customer.defaultPhone}</span> : null}
+                        {customer.representativeName ? <span className="text-xs text-slate-600 dark:text-slate-300">المندوب: {customer.representativeName}</span> : null}
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">التجار الفرعيين: {customer.subMerchantsCount}</span>
                         <div className="flex flex-wrap items-center gap-2" onClick={(event) => event.stopPropagation()}>
-                        {canManage && <button type="button" onClick={() => openDrawer(customer)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><Plus className="h-3.5 w-3.5" />إضافة تاجر</button>}
-                        {canManage && (
+                        {canManage && <button type="button" onClick={() => openDrawer(customer)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white"><Plus className="h-3.5 w-3.5" />إضافة تاجر</button>}
+                        {(canManage || canDeleteCustomer) && (
                           <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-950">
-                            <button type="button" onClick={() => openCustomerModal(customer)} title="تعديل" aria-label="تعديل" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 dark:text-slate-200"><Edit3 className="h-3.5 w-3.5" /></button>
+                            {canManage && <button type="button" onClick={() => openCustomerModal(customer)} title="تعديل" aria-label="تعديل" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white"><Edit3 className="h-3.5 w-3.5" /></button>}
                             {canDeleteCustomer && (confirmDeleteCustomerId === customer.id ? (
                               <button type="button" onClick={() => void removeCustomer(customer)} className="px-2 text-[11px] font-bold text-red-600">تأكيد</button>
                             ) : (
-                              <button type="button" onClick={() => setConfirmDeleteCustomerId(customer.id)} title="حذف" aria-label="حذف" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-3.5 w-3.5" /></button>
+                              <button type="button" onClick={() => setConfirmDeleteCustomerId(customer.id)} title="حذف" aria-label="حذف" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/70 dark:hover:text-red-200"><Trash2 className="h-3.5 w-3.5" /></button>
                             ))}
                           </div>
                         )}
@@ -438,14 +455,14 @@ export function CustomersPage() {
                                 <p className="flex items-center gap-1.5 text-sm font-bold text-slate-900 dark:text-white"><span className="text-amber-500" aria-hidden="true">•</span><span className="truncate">{merchant.name}</span></p>
                                 <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{merchant.location || 'بدون عنوان'}{merchant.phone ? <span dir="ltr" className="tabular-nums">{` · ${merchant.phone}`}</span> : null}</p>
                               </div>
-                              {canManage && (
+                              {(canManage || canDeleteSubMerchant) && (
                                 <div className="inline-flex shrink-0 rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-950">
-                                  <button type="button" title="تعديل" aria-label="تعديل" onClick={() => { setDrawerCustomer(customer); setEditingMerchant(merchant); setMerchantForm({ name: merchant.name, phone: merchant.phone ?? '', location: merchant.location ?? '' }); setExpandedOverride((prev) => ({ ...prev, [customer.id]: true })); }} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600"><Edit3 className="h-3.5 w-3.5" /></button>
-                                  {confirmDeleteMerchantId === merchant.id ? (
+                                  {canManage && <button type="button" title="تعديل" aria-label="تعديل" onClick={() => { setDrawerCustomer(customer); setEditingMerchant(merchant); setMerchantForm({ name: merchant.name, phone: merchant.phone ?? '', location: merchant.location ?? '' }); setExpandedOverride((prev) => ({ ...prev, [customer.id]: true })); }} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 dark:hover:bg-slate-700 dark:hover:text-white"><Edit3 className="h-3.5 w-3.5" /></button>}
+                                  {canDeleteSubMerchant && (confirmDeleteMerchantId === merchant.id ? (
                                     <button type="button" onClick={() => void removeMerchant(merchant)} className="px-2 text-[11px] font-bold text-red-600">تأكيد</button>
                                   ) : (
-                                    <button type="button" title="حذف" aria-label="حذف" onClick={() => setConfirmDeleteMerchantId(merchant.id)} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:text-red-600"><Trash2 className="h-3.5 w-3.5" /></button>
-                                  )}
+                                    <button type="button" title="حذف" aria-label="حذف" onClick={() => setConfirmDeleteMerchantId(merchant.id)} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:text-red-600 dark:hover:bg-red-950/70 dark:hover:text-red-200"><Trash2 className="h-3.5 w-3.5" /></button>
+                                  ))}
                                 </div>
                               )}
                             </div>
@@ -471,7 +488,7 @@ export function CustomersPage() {
           <form onSubmit={submitCustomer} onClick={(event) => event.stopPropagation()} className="relative z-10 w-full max-w-md rounded-lg border border-slate-200 border-r-4 border-r-blue-600 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-base font-bold">{editingCustomer ? 'تعديل العميل' : 'إضافة عميل'}</h2>
-              <button type="button" onClick={() => setCustomerModal(false)} aria-label="إغلاق" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+              <button type="button" onClick={() => setCustomerModal(false)} aria-label="إغلاق" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 dark:hover:text-white"><X className="h-5 w-5" /></button>
             </div>
             {customerError && <p role="alert" className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:bg-red-950/40 dark:text-red-300">{customerError}</p>}
             <div className="space-y-3">
@@ -487,9 +504,12 @@ export function CustomersPage() {
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">عنوان المخزن
                 <input value={customerForm.defaultLocation} onChange={(event) => setCustomerForm((prev) => ({ ...prev, defaultLocation: event.target.value }))} className={`${fieldClass} mt-1.5`} />
               </label>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">المندوب
+                <input value={customerForm.representativeName} onChange={(event) => setCustomerForm((prev) => ({ ...prev, representativeName: event.target.value }))} className={`${fieldClass} mt-1.5`} />
+              </label>
             </div>
             <div className="mt-5 flex justify-end gap-2">
-              <button type="button" onClick={() => setCustomerModal(false)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold dark:border-slate-700">إلغاء</button>
+              <button type="button" onClick={() => setCustomerModal(false)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إلغاء</button>
               <button type="submit" disabled={isSavingCustomer} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-60">
                 {isSavingCustomer && <Loader2 className="h-4 w-4 animate-spin" />}
                 حفظ
@@ -502,7 +522,7 @@ export function CustomersPage() {
     </div>
     <ReportPrint
       title="العملاء والتجار"
-      columns={['كود العميل', 'اسم العميل', 'الهاتف', 'العنوان', 'اسم التاجر', 'هاتف التاجر', 'المكان']}
+      columns={['كود العميل', 'اسم العميل', 'الهاتف', 'العنوان', 'المندوب', 'اسم التاجر', 'هاتف التاجر', 'المكان']}
       rows={customerRows}
     />
     </>

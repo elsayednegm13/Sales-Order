@@ -2,19 +2,28 @@ import React, { useState } from 'react';
 import { AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useAuth } from '@/client/contexts/AuthContext';
 import { useBranding } from '@/client/contexts/BrandingContext';
-import { ApiClientError } from '@/client/lib/api';
+import { api, ApiClientError } from '@/client/lib/api';
 import { BrandMark } from '@/client/components/ui/BrandMark';
 import { ThemeToggleButton } from '@/client/components/ui/ThemeToggleButton';
 
 export function LoginPage() {
   const { login } = useAuth();
-  const { settings } = useBranding();
+  const { settings, refreshSettings } = useBranding();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [view, setView] = useState<'login' | 'recover'>('login');
+  const [recoverMode, setRecoverMode] = useState<'employee' | 'admin'>('employee');
+  const [employeeStep, setEmployeeStep] = useState<'request' | 'code'>('request');
+  const [resetUsername, setResetUsername] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [requestBanner, setRequestBanner] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -30,12 +39,45 @@ export function LoginPage() {
     setIsSubmitting(true);
     try {
       await login({ username: trimmedUsername, password });
+      await refreshSettings();
     } catch (err) {
       if (err instanceof ApiClientError) {
         setErrorMessage(err.message);
       } else {
         setErrorMessage('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى');
       }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const fieldClass = 'block w-full rounded-xl border border-slate-300 bg-white py-2.5 px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-100 dark:placeholder:text-slate-500';
+
+  const submitReset = async (mode: 'employee' | 'admin_recovery') => {
+    if (newPassword.length < 6) {
+      setErrorMessage('كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErrorMessage('تأكيد كلمة المرور غير مطابق');
+      return;
+    }
+    setErrorMessage(null);
+    setIsSubmitting(true);
+    try {
+      const result = await api.auth.confirmPasswordReset({
+        mode,
+        username: resetUsername.trim(),
+        code: resetCode.trim(),
+        newPassword,
+      });
+      setSuccessMessage(result.message);
+      setView('login');
+      setResetCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      setErrorMessage(err instanceof ApiClientError ? err.message : 'تعذر إتمام الاستعادة');
     } finally {
       setIsSubmitting(false);
     }
@@ -55,6 +97,16 @@ export function LoginPage() {
           <h1 className="mt-4 text-xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
             {settings.companyName}
           </h1>
+          {view === 'recover' && (
+            <p className="mt-1.5 text-sm font-medium text-slate-500 dark:text-slate-400">
+              {recoverMode === 'employee' ? 'استعادة كلمة المرور' : 'طوارئ مدير النظام'}
+            </p>
+          )}
+          {view === 'recover' && recoverMode === 'admin' && (
+            <p className="mt-1 max-w-[18rem] text-xs leading-5 text-slate-400 dark:text-slate-500">
+              أدخل أحد رموز الطوارئ الاحتياطية الخاصة بحساب المدير
+            </p>
+          )}
         </div>
 
         {errorMessage && (
@@ -67,6 +119,13 @@ export function LoginPage() {
           </div>
         )}
 
+        {successMessage && (
+          <div role="status" className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-sm font-semibold text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200">
+            {successMessage}
+          </div>
+        )}
+
+        {view === 'login' ? (
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div>
             <label
@@ -141,6 +200,83 @@ export function LoginPage() {
             )}
           </button>
         </form>
+        ) : recoverMode === 'employee' ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 text-sm font-semibold dark:bg-slate-800">
+              <button type="button" onClick={() => setEmployeeStep('request')} className={employeeStep === 'request' ? 'rounded-lg bg-white py-2 text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-50' : 'rounded-lg py-2 text-slate-500 dark:text-slate-400'}>طلب كود</button>
+              <button type="button" onClick={() => setEmployeeStep('code')} className={employeeStep === 'code' ? 'rounded-lg bg-white py-2 text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-50' : 'rounded-lg py-2 text-slate-500 dark:text-slate-400'}>إدخال الكود</button>
+            </div>
+            {employeeStep === 'request' ? (
+              <form onSubmit={(event) => {
+                event.preventDefault();
+                setIsSubmitting(true);
+                setErrorMessage(null);
+                void api.auth.requestPasswordReset(resetUsername.trim()).then(() => {
+                  setRequestBanner('تم تسجيل الطلب بنجاح (إذا كان الحساب مفعّلاً). فور استلام الكود من المدير، أدخله أدناه مع كلمة المرور الجديدة.');
+                  setEmployeeStep('code');
+                }).catch((err) => {
+                  setErrorMessage(err instanceof ApiClientError ? err.message : 'تعذر إرسال الطلب');
+                }).finally(() => setIsSubmitting(false));
+              }} className="space-y-3">
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">اسم المستخدم
+                  <input value={resetUsername} onChange={(event) => setResetUsername(event.target.value)} placeholder="اسم المستخدم" className={`${fieldClass} mt-1.5`} />
+                </label>
+                <button type="submit" disabled={isSubmitting} className="w-full rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white disabled:opacity-60">إرسال الطلب</button>
+              </form>
+            ) : (
+              <form onSubmit={(event) => { event.preventDefault(); void submitReset('employee'); }} className="space-y-3">
+                {requestBanner && (
+                  <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold leading-5 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200">{requestBanner}</div>
+                )}
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">اسم المستخدم
+                  <input value={resetUsername} onChange={(event) => setResetUsername(event.target.value)} placeholder="اسم المستخدم" className={`${fieldClass} mt-1.5`} />
+                </label>
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">كود الاستعادة
+                  <input dir="ltr" value={resetCode} onChange={(event) => setResetCode(event.target.value.toUpperCase())} placeholder="XXXX-XXXX" className={`${fieldClass} mt-1.5 text-left font-mono`} />
+                </label>
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">كلمة المرور الجديدة
+                  <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="6 أحرف على الأقل" className={`${fieldClass} mt-1.5`} />
+                </label>
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">تأكيد كلمة المرور
+                  <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="أعد كتابة كلمة المرور" className={`${fieldClass} mt-1.5`} />
+                </label>
+                <button type="submit" disabled={isSubmitting} className="w-full rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white disabled:opacity-60">تعيين كلمة المرور الجديدة</button>
+              </form>
+            )}
+          </div>
+        ) : (
+          <form onSubmit={(event) => { event.preventDefault(); void submitReset('admin_recovery'); }} className="space-y-3">
+            <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">اسم المستخدم
+              <input value={resetUsername} onChange={(event) => setResetUsername(event.target.value)} placeholder="اسم المستخدم" className={`${fieldClass} mt-1.5`} />
+            </label>
+            <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">رمز الطوارئ
+              <input dir="ltr" value={resetCode} onChange={(event) => setResetCode(event.target.value.toUpperCase())} placeholder="XXXX-XXXX-XXXX" className={`${fieldClass} mt-1.5 text-left font-mono`} />
+            </label>
+            <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">كلمة المرور الجديدة
+              <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="6 أحرف على الأقل" className={`${fieldClass} mt-1.5`} />
+            </label>
+            <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">تأكيد كلمة المرور
+              <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="أعد كتابة كلمة المرور" className={`${fieldClass} mt-1.5`} />
+            </label>
+            <button type="submit" disabled={isSubmitting} className="w-full rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white disabled:opacity-60">استعادة حساب المدير</button>
+          </form>
+        )}
+        {view === 'login' && (
+          <button type="button" onClick={() => { setView('recover'); setRecoverMode('employee'); setErrorMessage(null); setSuccessMessage(null); }} className="mt-4 w-full text-center text-sm font-semibold text-slate-500 hover:text-blue-700 dark:text-slate-400 dark:hover:text-blue-300">
+            هل نسيت كلمة المرور؟
+          </button>
+        )}
+        {view === 'recover' && (
+          <p className="mt-5 text-center text-sm text-slate-500 dark:text-slate-400">
+            <button type="button" onClick={() => { setView('login'); setErrorMessage(null); }} className="font-medium hover:text-slate-800 dark:hover:text-slate-200">العودة لتسجيل الدخول</button>
+            <span className="mx-2 text-slate-300 dark:text-slate-600" aria-hidden="true">•</span>
+            {recoverMode === 'employee' ? (
+              <button type="button" onClick={() => { setRecoverMode('admin'); setErrorMessage(null); setResetCode(''); setNewPassword(''); setConfirmPassword(''); }} className="font-medium text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300">طوارئ المدير</button>
+            ) : (
+              <button type="button" onClick={() => { setRecoverMode('employee'); setErrorMessage(null); setResetCode(''); setNewPassword(''); setConfirmPassword(''); }} className="font-medium text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300">استعادة حساب موظف</button>
+            )}
+          </p>
+        )}
       </div>
     </main>
   );

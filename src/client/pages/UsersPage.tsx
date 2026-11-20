@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Check,
+  Copy,
+  Download,
   Edit3,
   FileSpreadsheet,
+  KeyRound,
   Loader2,
   Plus,
   Search,
@@ -19,10 +22,15 @@ import { useExcelExport } from '@/client/lib/useExcelExport';
 import { useAuth } from '@/client/contexts/AuthContext';
 import { useToast } from '@/client/components/ui/Toast';
 import {
+  applyStandardOnly,
+  clearSensitivePermissions,
+  countPermissions,
   getDefaultPermissionsForRole,
-  PERMISSION_GROUPS_AR,
+  isCustomizedPermissions,
+  PERMISSION_GROUPS,
   ROLE_DESCRIPTIONS_AR,
   ROLE_LABELS_AR,
+  withSyncedOrderView,
 } from '@/shared/permissions';
 import type { UserDTO, UserPermissions, UserRole } from '@/shared/types';
 
@@ -35,20 +43,7 @@ interface UserFormState {
   permissions: UserPermissions;
 }
 
-function countGrantedPermissions(perms: UserPermissions): number {
-  let count = 0;
-  for (const group of PERMISSION_GROUPS_AR) {
-    const groupObj = perms[group.key] as Record<string, boolean>;
-    for (const item of group.items) {
-      if (groupObj?.[item.subKey]) {
-        count += 1;
-      }
-    }
-  }
-  return count;
-}
-
-const TOTAL_PERMISSION_FLAGS = PERMISSION_GROUPS_AR.reduce(
+const TOTAL_PERMISSION_FLAGS = PERMISSION_GROUPS.reduce(
   (acc, group) => acc + group.items.length,
   0
 );
@@ -81,12 +76,26 @@ export function UsersPage() {
   // Inline delete confirmation state
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [busyRowId, setBusyRowId] = useState<number | null>(null);
+  const [resetRequests, setResetRequests] = useState<Array<{ userId: number; status: string; requestedAt: number; expiresAt: number | null }>>([]);
+  const [recovery, setRecovery] = useState<{ totalCount: number; remainingCount: number; usedCount: number; generatedAt: number | null } | null>(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryPassword, setRecoveryPassword] = useState('');
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [revealedCodes, setRevealedCodes] = useState<string[] | null>(null);
+  const [copiedAll, setCopiedAll] = useState(false);
+  const [issuedCode, setIssuedCode] = useState<{ code: string; expiresAt: number; username: string; fullName: string } | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedReadyMessage, setCopiedReadyMessage] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setIsLoading(true);
     try {
       const res = await api.users.list();
       setUsersList(res.users);
+      const [requests, codes] = await Promise.all([api.users.resetRequests(), api.users.recoveryStatus()]);
+      setResetRequests(requests.requests);
+      setRecovery(codes);
     } catch (err) {
       const msg =
         err instanceof ApiClientError ? err.message : 'تعذر تحميل قائمة المستخدمين';
@@ -157,16 +166,19 @@ export function UsersPage() {
     if (form.role === 'admin') return;
     setForm((prev) => {
       const currentGroup = prev.permissions[groupKey] as Record<string, boolean>;
-      return {
-        ...prev,
-        permissions: {
-          ...prev.permissions,
-          [groupKey]: {
-            ...currentGroup,
-            [subKey]: !currentGroup[subKey],
-          },
-        },
+      const nextGroup = {
+        ...currentGroup,
+        [subKey]: !currentGroup[subKey],
       };
+      const nextPermissions = withSyncedOrderView({
+        ...prev.permissions,
+        [groupKey]: nextGroup,
+      });
+      if (groupKey === 'dailySheets' && subKey === 'view') {
+        nextPermissions.orders.view = nextGroup.view;
+        nextPermissions.dailySheets.view = nextGroup.view;
+      }
+      return { ...prev, permissions: nextPermissions };
     });
   };
 
@@ -287,6 +299,26 @@ export function UsersPage() {
           <span className="tabular-nums px-3 py-1.5 font-semibold text-slate-700 dark:text-slate-200">الموقوفون: {usersList.filter((item) => !item.isActive).length.toLocaleString('en-US')}</span>
         </div>
       </section>
+      <section className="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">رموز طوارئ مدير النظام</h3>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {recovery && recovery.totalCount > 0
+                ? `آخر توليد: ${new Date(recovery.generatedAt ?? 0).toLocaleString('ar-EG')}`
+                : 'لم يتم توليد رموز طوارئ بعد'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-3 py-1 text-xs font-bold ${!recovery || recovery.totalCount === 0 ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' : recovery.remainingCount === 0 ? 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200' : recovery.remainingCount <= 2 ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-100' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'}`}>
+              {recovery && recovery.totalCount > 0 ? `رموز الطوارئ المتبقية: ${recovery.remainingCount} من ${recovery.totalCount}` : 'لم يتم توليد رموز طوارئ بعد'}
+            </span>
+            <button type="button" onClick={() => { setRecoveryOpen(true); setRecoveryError(null); setRecoveryPassword(''); }} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white dark:bg-white dark:text-slate-900">
+              {recovery && recovery.totalCount > 0 ? 'تحديث وتوليد 8 رموز جديدة' : 'توليد 8 رموز طوارئ'}
+            </button>
+          </div>
+        </div>
+      </section>
       <div className="no-print sticky top-16 z-20 -mx-4 flex flex-col justify-between gap-2 border-y border-slate-200 bg-slate-50/95 px-4 py-2.5 backdrop-blur-md sm:-mx-6 sm:px-6 lg:-mx-8 lg:flex-row lg:items-center lg:px-8 dark:border-slate-800 dark:bg-slate-950/95">
         <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1 sm:max-w-xs">
@@ -331,7 +363,7 @@ export function UsersPage() {
             type="button"
             onClick={handleExportExcel}
             disabled={usersList.length === 0 || isExporting}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-emerald-300 dark:hover:border-emerald-600 dark:hover:bg-emerald-950 dark:hover:text-emerald-100"
           >
             <FileSpreadsheet className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
             <span>تصدير Excel</span>
@@ -400,7 +432,9 @@ export function UsersPage() {
               ) : (
                 filteredUsers.map((u) => {
                   const isSelf = currentUser?.id === u.id;
-                  const grantedCount = countGrantedPermissions(u.permissions);
+                  const grantedCount = countPermissions(u.permissions).standard + countPermissions(u.permissions).sensitive;
+                  const sensitiveCount = countPermissions(u.permissions).sensitive;
+                  const customized = isCustomizedPermissions(u.role, u.permissions);
                   const isRowBusy = busyRowId === u.id;
 
                   return (
@@ -417,6 +451,15 @@ export function UsersPage() {
                             <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                               أنت
                             </span>
+                          )}
+                          {resetRequests.some((item) => item.userId === u.id && item.status === 'pending') && (
+                            <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-100">طلب استعادة معلّق</span>
+                          )}
+                          {resetRequests.some((item) => item.userId === u.id && item.status === 'issued') && (
+                            <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-100">كود استعادة فعّال</span>
+                          )}
+                          {resetRequests.some((item) => item.userId === u.id) && (
+                            <button type="button" onClick={() => { void api.users.revokeResetCode(u.id).then(() => loadUsers()); }} className="text-[11px] font-bold text-slate-500 hover:text-red-700">إلغاء الطلب</button>
                           )}
                         </div>
                         <p
@@ -448,8 +491,16 @@ export function UsersPage() {
                             كامل الصلاحيات ({TOTAL_PERMISSION_FLAGS}/{TOTAL_PERMISSION_FLAGS})
                           </span>
                         ) : (
-                          <span className="tabular-nums text-xs font-semibold text-slate-600 dark:text-slate-400">
-                            {grantedCount} من {TOTAL_PERMISSION_FLAGS} صلاحية
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            <span className="tabular-nums text-xs font-semibold text-slate-600 dark:text-slate-400">
+                              {grantedCount} من {TOTAL_PERMISSION_FLAGS} صلاحية
+                            </span>
+                            {customized && (
+                              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">مخصّص</span>
+                            )}
+                            {sensitiveCount > 0 && (
+                              <span className="rounded-md bg-red-100 px-2 py-0.5 text-[11px] font-bold text-red-800 dark:bg-red-950 dark:text-red-200">{sensitiveCount} حساسة</span>
+                            )}
                           </span>
                         )}
                       </td>
@@ -484,12 +535,33 @@ export function UsersPage() {
                             type="button"
                             onClick={() => openEditDrawer(u)}
                             disabled={isRowBusy}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white"
                             title="تعديل البيانات والصلاحيات"
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                             <span>تعديل</span>
                           </button>
+                          {u.isActive && !isSelf && (
+                            <button
+                              type="button"
+                              disabled={isRowBusy}
+                              onClick={() => {
+                                setBusyRowId(u.id);
+                                void api.users.issueResetCode(u.id).then((result) => {
+                                  setIssuedCode(result);
+                                  setCopiedCode(false);
+                                  setCopiedReadyMessage(false);
+                                  return loadUsers();
+                                }).catch((err) => {
+                                  notify(err instanceof ApiClientError ? err.message : 'تعذر إصدار الكود', 'error');
+                                }).finally(() => setBusyRowId(null));
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-800 disabled:opacity-50 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200"
+                            >
+                              <KeyRound className="h-3.5 w-3.5" />
+                              <span>كود استعادة</span>
+                            </button>
+                          )}
 
                           {!isSelf && (
                             <button
@@ -500,8 +572,8 @@ export function UsersPage() {
                               disabled={isRowBusy}
                               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
                                 u.isActive
-                                  ? 'border-amber-200 bg-amber-50/70 text-amber-800 hover:bg-amber-100 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300'
-                                  : 'border-emerald-200 bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300'
+                                  ? 'border-amber-200 bg-amber-50/70 text-amber-800 hover:bg-amber-100 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60 dark:hover:text-amber-100'
+                                  : 'border-emerald-200 bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-900/60 dark:hover:text-emerald-100'
                               }`}
                               title={u.isActive ? 'إيقاف الحساب' : 'تفعيل الحساب'}
                             >
@@ -535,7 +607,7 @@ export function UsersPage() {
                                 <button
                                   type="button"
                                   onClick={() => setConfirmDeleteId(null)}
-                                  className="px-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 dark:text-slate-300"
+                                  className="px-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
                                 >
                                   إلغاء
                                 </button>
@@ -545,7 +617,7 @@ export function UsersPage() {
                                 type="button"
                                 disabled={isRowBusy}
                                 onClick={() => setConfirmDeleteId(u.id)}
-                                className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-red-900/60 dark:hover:bg-red-950/40 dark:hover:text-red-400"
+                                className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-red-800 dark:hover:bg-red-950/70 dark:hover:text-red-200"
                                 aria-label={`حذف ${u.fullName}`}
                                 title="حذف المستخدم"
                               >
@@ -595,7 +667,7 @@ export function UsersPage() {
                 type="button"
                 onClick={() => setDrawerOpen(false)}
                 disabled={isSaving}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-white"
                 aria-label="إغلاق"
               >
                 <X className="h-5 w-5" />
@@ -711,7 +783,7 @@ export function UsersPage() {
                           className={`rounded-xl border p-3 text-right transition-colors disabled:opacity-45 ${
                             selected
                               ? 'border-blue-600 bg-blue-50/80 dark:border-blue-500 dark:bg-blue-950/50'
-                              : 'border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800/70'
+                              : 'border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white'
                           }`}
                         >
                           <p className="text-xs font-bold text-slate-900 dark:text-slate-100">
@@ -726,65 +798,54 @@ export function UsersPage() {
                   </div>
                 </div>
 
-                {/* Granular Permissions Matrix */}
                 <div>
-                  <div className="mb-2.5 flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                      مصفوفة الصلاحيات التفصيلية (RBAC)
-                    </span>
-                    {form.role === 'admin' && (
-                      <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400">
-                        يمتلك مدير النظام جميع الصلاحيات تلقائياً
-                      </span>
-                    )}
-                  </div>
-
+                  {(() => {
+                    const counts = countPermissions(form.permissions);
+                    return (
+                      <div className={`mb-2.5 flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${counts.sensitive > 0 ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100' : 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'}`}>
+                        <span>صلاحيات عادية: {counts.standard} · صلاحيات حساسة: {counts.sensitive}</span>
+                        {form.role === 'admin' && <span className="text-[11px] text-blue-700 dark:text-blue-300">يمتلك مدير النظام جميع الصلاحيات تلقائياً</span>}
+                      </div>
+                    );
+                  })()}
+                  {form.role !== 'admin' && (
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => setForm((prev) => ({ ...prev, permissions: getDefaultPermissionsForRole(prev.role) }))} className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">تطبيق قالب الدور</button>
+                      <button type="button" onClick={() => setForm((prev) => ({ ...prev, permissions: applyStandardOnly(prev.permissions) }))} className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">العادية فقط</button>
+                      <button type="button" onClick={() => setForm((prev) => ({ ...prev, permissions: clearSensitivePermissions(prev.permissions) }))} className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-bold text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-100">إلغاء الحساسة</button>
+                    </div>
+                  )}
                   <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/60">
-                    {PERMISSION_GROUPS_AR.map((group) => {
-                      const groupState = form.permissions[group.key] as Record<
-                        string,
-                        boolean
-                      >;
+                    {PERMISSION_GROUPS.filter((group) => !group.adminOnly).map((group) => {
+                      const groupState = form.permissions[group.key] as Record<string, boolean>;
                       return (
-                        <div
-                          key={group.key}
-                          className="rounded-xl border border-slate-200/80 bg-white p-3.5 dark:border-slate-800 dark:bg-[#111827]"
-                        >
-                          <p className="mb-2.5 text-xs font-bold text-slate-800 dark:text-slate-200">
-                            {group.title}
-                          </p>
+                        <div key={group.key} className="rounded-xl border border-slate-200/80 bg-white p-3.5 dark:border-slate-800 dark:bg-[#111827]">
+                          <p className="mb-2.5 text-xs font-bold text-slate-800 dark:text-slate-200">{group.title}</p>
                           <div className="flex flex-wrap gap-2">
                             {group.items.map((permItem) => {
                               const checked = Boolean(groupState?.[permItem.subKey]);
-                              const disabled =
-                                form.role === 'admin' ||
-                                group.key === 'users' ||
-                                group.key === 'settings';
-
+                              const disabled = form.role === 'admin';
                               return (
                                 <button
                                   key={permItem.subKey}
                                   type="button"
                                   disabled={disabled}
-                                  onClick={() =>
-                                    handleTogglePermission(group.key, permItem.subKey)
-                                  }
+                                  onClick={() => handleTogglePermission(group.key, permItem.subKey)}
                                   className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                                    checked
-                                      ? 'border-blue-600 bg-blue-600 text-white dark:border-blue-500 dark:bg-blue-600'
-                                      : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300'
+                                    permItem.sensitive
+                                      ? checked
+                                        ? 'border-red-700 bg-red-700 text-white dark:border-red-500 dark:bg-red-800'
+                                        : 'border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100'
+                                      : checked
+                                        ? 'border-blue-600 bg-blue-600 text-white dark:border-blue-500 dark:bg-blue-600'
+                                        : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300'
                                   } ${disabled ? 'cursor-default opacity-80' : ''}`}
                                 >
-                                  <span
-                                    className={`flex h-3.5 w-3.5 items-center justify-center rounded-xs ${
-                                      checked
-                                        ? 'bg-white/20 text-white'
-                                        : 'border border-slate-400 dark:border-slate-500'
-                                    }`}
-                                  >
+                                  <span className={`flex h-3.5 w-3.5 items-center justify-center rounded-xs ${checked ? 'bg-white/20 text-white' : 'border border-current'}`}>
                                     {checked && <Check className="h-2.5 w-2.5" />}
                                   </span>
                                   <span>{permItem.label}</span>
+                                  {permItem.sensitive && <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${checked ? 'bg-white/20 text-white' : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200'}`}>حساسة</span>}
                                 </button>
                               );
                             })}
@@ -792,6 +853,18 @@ export function UsersPage() {
                         </div>
                       );
                     })}
+                    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-100/80 p-3.5 dark:border-slate-700 dark:bg-slate-950/50">
+                      <p className="mb-1 text-xs font-bold text-slate-800 dark:text-slate-100">الإدارة والنظام</p>
+                      <p className="mb-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">مقصورة على مدير النظام فقط</p>
+                      <div className="flex flex-wrap gap-2">
+                        {PERMISSION_GROUPS.filter((group) => group.adminOnly).flatMap((group) => group.items).map((permItem) => (
+                          <span key={permItem.label} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                            {permItem.label}
+                            <span className="rounded-md bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-800 dark:bg-red-950 dark:text-red-200">حساسة</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -801,7 +874,7 @@ export function UsersPage() {
                   type="button"
                   disabled={isSaving}
                   onClick={() => setDrawerOpen(false)}
-                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white"
                 >
                   إلغاء
                 </button>
@@ -815,6 +888,81 @@ export function UsersPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {recoveryOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              setRecoveryBusy(true);
+              setRecoveryError(null);
+              void api.users.regenerateRecoveryCodes(recoveryPassword).then((result) => {
+                setRevealedCodes(result.codes);
+                setRecoveryOpen(false);
+                setRecoveryPassword('');
+                setCopiedAll(false);
+                return loadUsers();
+              }).catch((err) => {
+                setRecoveryError(err instanceof ApiClientError ? err.message : 'تعذر توليد الرموز');
+              }).finally(() => setRecoveryBusy(false));
+            }}
+            className="w-full max-w-md rounded-2xl bg-white p-5 dark:bg-slate-900"
+          >
+            <h3 className="font-bold text-slate-900 dark:text-white">توليد رموز الطوارئ</h3>
+            <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">توليد رموز جديدة يلغي كل الرموز السابقة غير المستخدمة.</p>
+            <input type="password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} placeholder="كلمة المرور الحالية" className="mt-3 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950" />
+            {recoveryError && <p className="mt-2 text-xs font-bold text-red-700">{recoveryError}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setRecoveryOpen(false)} className="rounded-lg border px-3 py-2 text-xs font-bold dark:border-slate-700">إلغاء</button>
+              <button type="submit" disabled={recoveryBusy} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-60">توليد</button>
+            </div>
+          </form>
+        </div>
+      )}
+      {revealedCodes && currentUser && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 dark:bg-slate-900">
+            <h3 className="font-bold text-slate-900 dark:text-white">رموز الطوارئ</h3>
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-100">لن تظهر هذه الرموز مرة أخرى بعد إغلاق النافذة.</p>
+            <div dir="ltr" className="mt-3 grid grid-cols-2 gap-2 font-mono text-sm">
+              {revealedCodes.map((code, index) => (
+                <div key={code} className="rounded-lg border border-slate-200 px-3 py-2 text-left dark:border-slate-700">{index + 1}. {code}</div>
+              ))}
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => {
+                const stamp = new Date().toISOString().slice(0, 10);
+                const body = [`account: ${currentUser.username}`, `generated: ${new Date().toISOString()}`, '', ...revealedCodes.map((code, index) => `${index + 1}. ${code}`)].join('\n');
+                const url = URL.createObjectURL(new Blob([body], { type: 'text/plain;charset=utf-8' }));
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `recovery-codes-${currentUser.username}-${stamp}.txt`;
+                link.click();
+                URL.revokeObjectURL(url);
+              }} className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-bold dark:border-slate-700"><Download className="h-3.5 w-3.5" />تنزيل ملف .txt</button>
+              <button type="button" onClick={() => { void navigator.clipboard.writeText(revealedCodes.join('\n')).then(() => setCopiedAll(true)); }} className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-bold dark:border-slate-700"><Copy className="h-3.5 w-3.5" />{copiedAll ? 'تم النسخ' : 'نسخ جميع الرموز'}</button>
+              <button type="button" onClick={() => setRevealedCodes(null)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white dark:bg-white dark:text-slate-900">إغلاق</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {issuedCode && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 dark:bg-slate-900">
+            <h3 className="font-bold text-slate-900 dark:text-white">كود استعادة {issuedCode.fullName}</h3>
+            <p dir="ltr" className="mt-3 rounded-xl bg-slate-100 px-4 py-3 text-center font-mono text-2xl font-bold tracking-widest dark:bg-slate-800">{issuedCode.code}</p>
+            <p className="mt-2 text-xs text-slate-500">ينتهي خلال 30 دقيقة — {new Date(issuedCode.expiresAt).toLocaleTimeString('ar-EG')}</p>
+            <p className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold leading-5 text-blue-900 dark:border-blue-900 dark:bg-blue-950/50 dark:text-blue-100">خطوات الموظف: فتح صفحة الدخول ← «هل نسيت كلمة المرور؟» ← «إدخال الكود» ← إدخال اسم المستخدم والكود وكلمة المرور الجديدة.</p>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => { void navigator.clipboard.writeText(issuedCode.code).then(() => { setCopiedCode(true); setCopiedReadyMessage(false); }); }} className="rounded-lg border px-3 py-2 text-xs font-bold dark:border-slate-700">{copiedCode ? 'تم النسخ' : 'نسخ الكود'}</button>
+              <button type="button" onClick={() => {
+                const message = `كود استعادة كلمة المرور لحساب (${issuedCode.username}):\n${issuedCode.code}\nصالح لمدة 30 دقيقة ولمرة واحدة فقط.\nلإعادة التعيين: افتح صفحة الدخول ← «هل نسيت كلمة المرور؟» ← «إدخال الكود» وأدخل اسم المستخدم والكود وكلمة المرور الجديدة.`;
+                void navigator.clipboard.writeText(message).then(() => { setCopiedReadyMessage(true); setCopiedCode(false); });
+              }} className="rounded-lg border px-3 py-2 text-xs font-bold dark:border-slate-700">{copiedReadyMessage ? 'تم نسخ الرسالة' : 'نسخ رسالة جاهزة للموظف'}</button>
+              <button type="button" onClick={() => setIssuedCode(null)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">إغلاق</button>
+            </div>
           </div>
         </div>
       )}

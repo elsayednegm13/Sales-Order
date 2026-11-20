@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, asc, count, desc, eq, like, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ne, or, sql, type SQL } from 'drizzle-orm';
 import { orderItems, products, type ProductRow } from '@/db/schema';
 import type {
   CreateProductDTO,
@@ -10,10 +10,13 @@ import type {
   UpdateProductDTO,
 } from '@/shared/types';
 import type { AppContextEnv } from '@/worker/types';
-import { requireAdmin, requireAuth, requirePermission } from '@/worker/middleware/auth';
+import { requireAuth, requirePermission } from '@/worker/middleware/auth';
 import { bumpCacheVersions, CACHE_NAMESPACES, readVersionedCache } from '@/worker/cache';
-import { createProductSchema, productBulkImportSchema, readJson, updateProductSchema } from '@/worker/schemas';
+import { createProductSchema, isUniqueConstraintError, productBulkImportSchema, readJson, updateProductSchema } from '@/worker/schemas';
 import { importProducts } from '@/worker/services/bulkImport';
+import { containsLike } from '@/worker/utils/like';
+import { recordAuditLog } from '@/worker/services/auditLog';
+import { clientIp } from '@/worker/utils/loginRateLimit';
 
 export const productsRoutes = new Hono<AppContextEnv>();
 
@@ -98,8 +101,7 @@ productsRoutes.get('/', requirePermission('catalog', 'view'), async (c) => {
 
   const filters: SQL[] = [];
   if (search) {
-    const term = `%${search}%`;
-    const nameOrCode = or(like(products.code, term), like(products.name, term));
+    const nameOrCode = or(containsLike(products.code, search), containsLike(products.name, search));
     if (nameOrCode) filters.push(nameOrCode);
   }
   if (category) {
@@ -135,12 +137,28 @@ productsRoutes.get('/', requirePermission('catalog', 'view'), async (c) => {
   return c.json(payload);
 });
 
-productsRoutes.post('/bulk-import', requirePermission('catalog', 'manage'), async (c) => {
+productsRoutes.post('/bulk-import', requirePermission('catalog', 'bulkImport'), async (c) => {
   const parsed = await readJson(c, productBulkImportSchema);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const db = c.get('db');
   const result = await importProducts(db, parsed.data.items, parsed.data.selectedFields);
   await bumpCacheVersions(db, [CACHE_NAMESPACES.products, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
+  const conflict = result.errors.find((row) => row.message.includes('مسجّل'));
+  if (conflict && result.created === 0 && result.updated === 0) {
+    return c.json({ error: conflict.message, ...result }, 409);
+  }
+  const user = c.get('user');
+  await recordAuditLog(db, {
+    actorUserId: user.id,
+    actorUsername: user.username,
+    actorFullName: user.fullName,
+    module: 'catalog',
+    action: 'bulk_import',
+    entityType: 'product',
+    summary: `استيراد منتجات: أُنشئ ${result.created} وحُدّث ${result.updated}`,
+    details: { created: result.created, updated: result.updated, rows: parsed.data.items.length, errorCount: result.errors.length },
+    ipAddress: clientIp((name) => c.req.header(name)),
+  });
   return c.json(result);
 });
 
@@ -186,23 +204,30 @@ productsRoutes.post('/', requirePermission('catalog', 'manage'), async (c) => {
     return c.json({ error: 'كود الصنف مسجّل مسبقاً لمنتج آخر' }, 409);
   }
 
-  const inserted = await db
-    .insert(products)
-    .values({
-      code,
-      name,
-      category: body.category,
-      grade: body.grade,
-      itemType,
-      packingCapacity,
-      weight: weight.weight,
-      isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
-    })
-    .returning()
-    .get();
+  try {
+    const inserted = await db
+      .insert(products)
+      .values({
+        code,
+        name,
+        category: body.category,
+        grade: body.grade,
+        itemType,
+        packingCapacity,
+        weight: weight.weight,
+        isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
+      })
+      .returning()
+      .get();
 
-  await bumpCacheVersions(c.get('db'), [CACHE_NAMESPACES.products, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
-  return c.json({ product: mapProduct(inserted) }, 201);
+    await bumpCacheVersions(c.get('db'), [CACHE_NAMESPACES.products, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
+    return c.json({ product: mapProduct(inserted) }, 201);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return c.json({ error: 'كود الصنف مسجّل مسبقاً لمنتج آخر' }, 409);
+    }
+    throw error;
+  }
 });
 
 productsRoutes.put('/:id', requirePermission('catalog', 'manage'), async (c) => {
@@ -269,25 +294,32 @@ productsRoutes.put('/:id', requirePermission('catalog', 'manage'), async (c) => 
     }
   }
 
-  const updated = await db
-    .update(products)
-    .set({ code, name, category, grade, itemType, packingCapacity, weight, isActive })
-    .where(eq(products.id, id))
-    .returning()
-    .get();
+  try {
+    const updated = await db
+      .update(products)
+      .set({ code, name, category, grade, itemType, packingCapacity, weight, isActive })
+      .where(eq(products.id, id))
+      .returning()
+      .get();
 
-  await bumpCacheVersions(c.get('db'), [CACHE_NAMESPACES.products, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
-  return c.json({ product: mapProduct(updated) });
+    await bumpCacheVersions(c.get('db'), [CACHE_NAMESPACES.products, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
+    return c.json({ product: mapProduct(updated) });
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return c.json({ error: 'كود الصنف مسجّل مسبقاً لمنتج آخر' }, 409);
+    }
+    throw error;
+  }
 });
 
-productsRoutes.delete('/:id', requireAdmin, async (c) => {
+productsRoutes.delete('/:id', requirePermission('catalog', 'delete'), async (c) => {
   const id = Number.parseInt(c.req.param('id'), 10);
   if (!Number.isFinite(id)) {
     return c.json({ error: 'معرّف المنتج غير صالح' }, 400);
   }
 
   const db = c.get('db');
-  const existing = await db.select({ id: products.id }).from(products).where(eq(products.id, id)).get();
+  const existing = await db.select({ id: products.id, name: products.name, code: products.code }).from(products).where(eq(products.id, id)).get();
   if (!existing) {
     return c.json({ error: 'المنتج غير موجود' }, 404);
   }
@@ -310,6 +342,19 @@ productsRoutes.delete('/:id', requireAdmin, async (c) => {
   }
 
   await db.delete(products).where(eq(products.id, id));
+  const user = c.get('user');
+  await recordAuditLog(db, {
+    actorUserId: user.id,
+    actorUsername: user.username,
+    actorFullName: user.fullName,
+    module: 'catalog',
+    action: 'delete_product',
+    entityType: 'product',
+    entityId: id,
+    entityLabel: `${existing.code} — ${existing.name}`,
+    summary: `حذف الصنف ${existing.name} (${existing.code})`,
+    ipAddress: clientIp((name) => c.req.header(name)),
+  });
   await bumpCacheVersions(c.get('db'), [CACHE_NAMESPACES.products, CACHE_NAMESPACES.dashboard, CACHE_NAMESPACES.reports]);
   return c.json({ ok: true, deletedId: id });
 });

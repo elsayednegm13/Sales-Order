@@ -21,6 +21,7 @@ assetsRoutes.get('/*', async (c) => {
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('cache-control', 'public, max-age=31536000, immutable');
+  headers.set('x-content-type-options', 'nosniff');
   headers.set(
     'content-security-policy',
     "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"

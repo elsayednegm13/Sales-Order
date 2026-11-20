@@ -211,7 +211,7 @@ export function BulkImportModal({
             <p className="mt-1 text-xs text-slate-500">{fileName || 'اختر ملف Excel المطابق للقالب'}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={isBusy} onClick={() => void downloadTemplate()} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+            <button type="button" disabled={isBusy} onClick={() => void downloadTemplate()} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">
               <Download className="h-3.5 w-3.5" />
               تحميل القالب الجاهز (.xlsx)
             </button>
@@ -318,7 +318,7 @@ export function BulkImportModal({
           )}
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4 dark:border-slate-800">
-          <button type="button" disabled={isBusy} onClick={onClose} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200">إغلاق</button>
+          <button type="button" disabled={isBusy} onClick={onClose} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">إغلاق</button>
           <button type="button" disabled={blocked} onClick={() => void submit()} className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
             <FileSpreadsheet className="h-4 w-4" />
             تأكيد الاستيراد
