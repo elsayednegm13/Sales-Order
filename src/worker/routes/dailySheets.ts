@@ -6,7 +6,7 @@ import type { AppContextEnv } from '@/worker/types';
 import { requireAuth, requirePermission } from '@/worker/middleware/auth';
 import { createDailySheetSchema, isUniqueConstraintError, readJson, updateDailySheetSchema } from '@/worker/schemas';
 import { loadSheetDetail, nextSheetNumber, readLiveNextSheetNumber } from '@/worker/services/dailySheets';
-import { bumpCacheVersions, CACHE_NAMESPACES } from '@/worker/cache';
+import { bumpCacheVersions, CACHE_NAMESPACES, dashboardCacheEtag, ifNoneMatchSatisfied, readCacheVersion } from '@/worker/cache';
 import { recordAuditLog } from '@/worker/services/auditLog';
 import { clientIp } from '@/worker/utils/loginRateLimit';
 import { chunkedInArrayQuery } from '@/worker/utils/dbChunk';
@@ -48,6 +48,12 @@ dailySheetsRoutes.get('/', requirePermission('dailySheets', 'view'), async (c) =
   const requestedSize = Number.parseInt(c.req.query('pageSize') ?? '20', 10) || 20;
   const pageSize = Math.min(100, Math.max(1, requestedSize));
   const db = c.get('db');
+  const etag = dashboardCacheEtag(await readCacheVersion(db, CACHE_NAMESPACES.dashboard));
+  if (ifNoneMatchSatisfied(c.req.header('If-None-Match'), etag)) {
+    c.header('ETag', etag);
+    c.header('Cache-Control', 'private, no-cache');
+    return c.body(null, 304);
+  }
   const filters: SQL[] = [];
   if (status) filters.push(eq(dailySheets.status, status));
   if (search) filters.push(containsLike(dailySheets.sheetNumber, search));
@@ -77,6 +83,8 @@ dailySheetsRoutes.get('/', requirePermission('dailySheets', 'view'), async (c) =
   );
   const countMap = new Map(counts.map((row) => [row.sheetId, row.total]));
 
+  c.header('ETag', etag);
+  c.header('Cache-Control', 'private, no-cache');
   return c.json({
     sheets: rows.map((row) => mapListItem(row, countMap.get(row.id) ?? 0)),
     page,
@@ -130,8 +138,16 @@ dailySheetsRoutes.get('/:id', requirePermission('dailySheets', 'view'), async (c
   const id = Number.parseInt(c.req.param('id'), 10);
   if (!Number.isFinite(id)) return c.json({ error: 'معرّف الأوردر غير صالح' }, 400);
   const db = c.get('db');
+  const etag = dashboardCacheEtag(await readCacheVersion(db, CACHE_NAMESPACES.dashboard));
+  if (ifNoneMatchSatisfied(c.req.header('If-None-Match'), etag)) {
+    c.header('ETag', etag);
+    c.header('Cache-Control', 'private, no-cache');
+    return c.body(null, 304);
+  }
   const sheet = await db.select().from(dailySheets).where(eq(dailySheets.id, id)).get();
   if (!sheet) return c.json({ error: 'أوردر اليوم غير موجود' }, 404);
+  c.header('ETag', etag);
+  c.header('Cache-Control', 'private, no-cache');
   return c.json({ sheet: await loadSheetDetail(db, sheet) });
 });
 

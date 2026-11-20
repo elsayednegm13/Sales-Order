@@ -5,6 +5,7 @@ import { api, ApiClientError } from '@/client/lib/api';
 import { exportOrderSheetExcel } from '@/client/lib/sheetExport';
 import { useExcelExport } from '@/client/lib/useExcelExport';
 import { useAuth } from '@/client/contexts/AuthContext';
+import { useSilentAutoRefresh } from '@/client/hooks/useSilentAutoRefresh';
 import { useToast } from '@/client/components/ui/Toast';
 import { PrintSelectionModal } from '@/client/components/print/PrintSelectionModal';
 import { SkeletonBlock, SkeletonCard } from '@/client/components/ui/Skeleton';
@@ -144,6 +145,7 @@ export function DailySheetDetailPage() {
   const [cancelReason, setCancelReason] = useState('');
   const [confirmBusy, setConfirmBusy] = useState(false);
   const loadedOnce = useRef(false);
+  const etagRef = useRef<string | null>(null);
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quickMerchantOpen, setQuickMerchantOpen] = useState(false);
   const [quickName, setQuickName] = useState('');
@@ -167,23 +169,26 @@ export function DailySheetDetailPage() {
     if (!loadedOnce.current) setIsLoading(true);
     try {
       const [sheetRes, productRes, customerRes] = await Promise.all([
-        api.dailySheets.get(id),
+        api.dailySheets.getSilent(id),
         api.products.list({ isActive: true, sort: 'code' }),
         api.customers.list({ includeSubMerchants: true }),
       ]);
+      if (sheetRes.notModified) return;
+      etagRef.current = sheetRes.etag;
       setSheet({
-        ...sheetRes.sheet,
-        orders: [...sheetRes.sheet.orders]
+        ...sheetRes.data.sheet,
+        orders: [...sheetRes.data.sheet.orders]
           .sort((a, b) => a.id - b.id)
           .map((order) => ({
             ...order,
             items: [...order.items].sort((a, b) => a.id - b.id),
           })),
       });
-      setSheetNumber(sheetRes.sheet.sheetNumber);
-      setSheetDate(sheetRes.sheet.sheetDate);
-      setNotes(sheetRes.sheet.notes ?? '');
-      setStatus(sheetRes.sheet.status);
+      const loadedSheet = sheetRes.data.sheet;
+      setSheetNumber(loadedSheet.sheetNumber);
+      setSheetDate(loadedSheet.sheetDate);
+      setNotes(loadedSheet.notes ?? '');
+      setStatus(loadedSheet.status);
       setProducts(productRes.products);
       setCustomers(customerRes.customers);
     } catch (err) {
@@ -195,8 +200,35 @@ export function DailySheetDetailPage() {
   }, [id, notify]);
 
   useEffect(() => {
+    etagRef.current = null;
+  }, [id]);
+
+  useEffect(() => {
     void load();
   }, [load]);
+
+  useSilentAutoRefresh({
+    paused: editor !== null || sheetMetaOpen || printOpen || pendingConfirm !== null || quickCustomerOpen || quickMerchantOpen || quickProductOpen,
+    resetKey: id,
+    onTick: async (signal) => {
+      if (!Number.isFinite(id)) return;
+      const res = await api.dailySheets.getSilent(id, { etag: etagRef.current, signal });
+      if (res.notModified) {
+        etagRef.current = res.etag ?? etagRef.current;
+        return;
+      }
+      etagRef.current = res.etag;
+      setSheet({
+        ...res.data.sheet,
+        orders: [...res.data.sheet.orders]
+          .sort((a, b) => a.id - b.id)
+          .map((order) => ({
+            ...order,
+            items: [...order.items].sort((a, b) => a.id - b.id),
+          })),
+      });
+    },
+  });
 
   useLayoutEffect(() => {
     if (editor?.orderId) {

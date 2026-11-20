@@ -1,7 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Boxes, ClipboardList, Package, Scale, Store, Users } from 'lucide-react';
 import { api, ApiClientError } from '@/client/lib/api';
+import { useSilentAutoRefresh } from '@/client/hooks/useSilentAutoRefresh';
 import { useAuth } from '@/client/contexts/AuthContext';
 import { useToast } from '@/client/components/ui/Toast';
 import type { DashboardStatsDTO, DailySheetStatus } from '@/shared/types';
@@ -29,14 +30,17 @@ export function DashboardPage() {
   const { notify } = useToast();
   const [stats, setStats] = useState<DashboardStatsDTO>(EMPTY_STATS);
   const [isLoading, setIsLoading] = useState(true);
+  const etagRef = useRef<string | null>(null);
   const greetingName = user?.fullName?.trim() || user?.username || '';
 
   useEffect(() => {
     let active = true;
     api.dashboard
-      .stats()
+      .statsSilent()
       .then((res) => {
-        if (active) setStats(res.stats);
+        if (!active || res.notModified) return;
+        etagRef.current = res.etag;
+        setStats(res.data.stats);
       })
       .catch((err: unknown) => {
         notify(err instanceof ApiClientError ? err.message : 'تعذر تحميل مؤشرات التشغيل', 'error');
@@ -48,6 +52,19 @@ export function DashboardPage() {
       active = false;
     };
   }, [notify]);
+
+  useSilentAutoRefresh({
+    paused: false,
+    onTick: async (signal) => {
+      const res = await api.dashboard.statsSilent({ etag: etagRef.current, signal });
+      if (res.notModified) {
+        etagRef.current = res.etag ?? etagRef.current;
+        return;
+      }
+      etagRef.current = res.etag;
+      setStats(res.data.stats);
+    },
+  });
 
   return (
     <div className="space-y-8">

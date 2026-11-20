@@ -10,6 +10,7 @@ import { Pagination } from '@/client/components/ui/Pagination';
 import { SkeletonTableRows } from '@/client/components/ui/Skeleton';
 import { PrintSelectionModal } from '@/client/components/print/PrintSelectionModal';
 import { useAuth } from '@/client/contexts/AuthContext';
+import { useSilentAutoRefresh } from '@/client/hooks/useSilentAutoRefresh';
 import { useToast } from '@/client/components/ui/Toast';
 import type { DailySheetListItemDTO } from '@/shared/types';
 
@@ -46,14 +47,17 @@ export function DailySheetsPage() {
   const savingOrderRef = useRef(false);
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [printOpen, setPrintOpen] = useState(false);
+  const etagRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await api.dailySheets.list({ status, page, pageSize: 20, search: debouncedSearch });
-      setSheets(res.sheets);
-      setTotal(res.total);
-      setNextNumber(res.nextSheetNumber);
+      const res = await api.dailySheets.listSilent({ status, page, pageSize: 20, search: debouncedSearch });
+      if (res.notModified) return;
+      etagRef.current = res.etag;
+      setSheets(res.data.sheets);
+      setTotal(res.data.total);
+      setNextNumber(res.data.nextSheetNumber);
     } catch (err) {
       notify(err instanceof ApiClientError ? err.message : 'تعذر تحميل أوردرات اليوم', 'error');
     } finally {
@@ -73,8 +77,35 @@ export function DailySheetsPage() {
   }, [sheetQuery]);
 
   useEffect(() => {
+    etagRef.current = null;
+  }, [status, page, debouncedSearch]);
+
+  useEffect(() => {
     void load();
   }, [load]);
+
+  useSilentAutoRefresh({
+    paused: modalOpen || printOpen || confirmId !== null,
+    resetKey: `${status}|${page}|${debouncedSearch}`,
+    onTick: async (signal) => {
+      const res = await api.dailySheets.listSilent({
+        status,
+        page,
+        pageSize: 20,
+        search: debouncedSearch,
+        etag: etagRef.current,
+        signal,
+      });
+      if (res.notModified) {
+        etagRef.current = res.etag ?? etagRef.current;
+        return;
+      }
+      etagRef.current = res.etag;
+      setSheets(res.data.sheets);
+      setTotal(res.data.total);
+      setNextNumber(res.data.nextSheetNumber);
+    },
+  });
 
   useEffect(() => {
     if (!isLoading && params.get('new') === '1' && canCreate) {

@@ -121,6 +121,58 @@ async function requestJson<T>(
   }
 }
 
+export type SilentFetchResult<T> =
+  | { notModified: true; etag: string | null }
+  | { notModified: false; data: T; etag: string | null };
+
+async function requestSilent<T>(
+  path: string,
+  init: { etag?: string | null; signal?: AbortSignal } = {},
+): Promise<SilentFetchResult<T>> {
+  forgetLegacyToken();
+  const headers = new Headers();
+  if (init.etag) headers.set('If-None-Match', init.etag);
+
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
+  const signals = [timeout.signal, init.signal].filter((signal): signal is AbortSignal => Boolean(signal));
+  const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+
+  try {
+    const response = await fetch(path, {
+      headers,
+      credentials: 'include',
+      signal,
+    });
+    if (response.status === 304) {
+      return { notModified: true, etag: response.headers.get('ETag') };
+    }
+
+    const isJson = response.headers.get('content-type')?.includes('application/json');
+    const payload = isJson ? await response.json() : null;
+    if (!response.ok) {
+      const errPayload = payload as ApiErrorResponse | null;
+      if (response.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/me') {
+        window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+      }
+      throw new ApiClientError(
+        errPayload?.error || 'تعذر إتمام العملية، يرجى المحاولة مرة أخرى',
+        response.status,
+        errPayload?.code,
+      );
+    }
+    return { notModified: false, data: payload as T, etag: response.headers.get('ETag') };
+  } catch (error) {
+    if (init.signal?.aborted) throw error;
+    if (timeout.signal.aborted) {
+      throw new ApiClientError('انتهت مهلة الاتصال بالخادم، يرجى المحاولة مرة أخرى', 0, 'TIMEOUT');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const api = {
   auth: {
     async login(credentials: LoginRequestDTO): Promise<LoginResponseDTO> {
@@ -451,6 +503,9 @@ export const api = {
     async stats(): Promise<{ stats: DashboardStatsDTO }> {
       return cachedQuery('dashboard', () => requestJson('/api/dashboard/stats'));
     },
+    async statsSilent(init: { etag?: string | null; signal?: AbortSignal } = {}): Promise<SilentFetchResult<{ stats: DashboardStatsDTO }>> {
+      return requestSilent('/api/dashboard/stats', init);
+    },
   },
 
   dailySheets: {
@@ -479,8 +534,30 @@ export const api = {
       return result;
     },
 
+    async listSilent(params: { status?: 'open' | 'closed' | 'archived' | ''; page?: number; pageSize?: number; search?: string; etag?: string | null; signal?: AbortSignal } = {}): Promise<SilentFetchResult<{
+      sheets: DailySheetListItemDTO[];
+      page: number;
+      pageSize: number;
+      total: number;
+      nextSheetNumber: string;
+    }>> {
+      return requestSilent(
+        withQuery('/api/daily-sheets', {
+          status: params.status || undefined,
+          search: params.search || undefined,
+          page: params.page ? String(params.page) : undefined,
+          pageSize: params.pageSize ? String(params.pageSize) : undefined,
+        }),
+        { etag: params.etag, signal: params.signal },
+      );
+    },
+
     async get(id: number): Promise<{ sheet: DailySheetDetailDTO }> {
       return cachedQuery(`sheet:${id}`, () => requestJson(`/api/daily-sheets/${id}`));
+    },
+
+    async getSilent(id: number, init: { etag?: string | null; signal?: AbortSignal } = {}): Promise<SilentFetchResult<{ sheet: DailySheetDetailDTO }>> {
+      return requestSilent(`/api/daily-sheets/${id}`, init);
     },
 
     async update(id: number, data: UpdateDailySheetDTO): Promise<{ sheet: DailySheetListItemDTO }> {

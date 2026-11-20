@@ -55,7 +55,7 @@ function withSecurityHeaders(response: Response, requestUrl: string, cacheContro
 app.use('*', async (c, next) => {
   await next();
   const cacheControl = c.req.path.startsWith('/api/') && !c.req.path.startsWith('/api/assets/')
-    ? 'private, no-store'
+    ? (c.res.headers.has('etag') ? 'private, no-cache' : 'private, no-store')
     : undefined;
   c.res = withSecurityHeaders(c.res, c.req.url, cacheControl);
 });

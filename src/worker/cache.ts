@@ -58,6 +58,15 @@ function rememberVersion(namespace: string, version: number): void {
   versionMemory.set(namespace, { version, expires: Date.now() + VERSION_TTL_MS });
 }
 
+export function dashboardCacheEtag(version: number): string {
+  return `W/"dash-v${version}"`;
+}
+
+export function ifNoneMatchSatisfied(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  return header.split(',').some((part) => part.trim() === etag);
+}
+
 export async function readCacheVersion(db: AppDatabase, namespace: CacheNamespace): Promise<number> {
   const cached = versionMemory.get(namespace);
   if (cached && cached.expires > Date.now()) return cached.version;

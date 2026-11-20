@@ -3,7 +3,7 @@ import { and, count, desc, eq, ne, sql } from 'drizzle-orm';
 import { clientOrders, customers, dailySheets, products, subMerchants } from '@/db/schema';
 import type { AppContextEnv } from '@/worker/types';
 import { requireAuth, requirePermission } from '@/worker/middleware/auth';
-import { CACHE_NAMESPACES, readVersionedCache } from '@/worker/cache';
+import { CACHE_NAMESPACES, dashboardCacheEtag, ifNoneMatchSatisfied, readCacheVersion, readVersionedCache } from '@/worker/cache';
 
 export const dashboardRoutes = new Hono<AppContextEnv>();
 
@@ -11,6 +11,12 @@ dashboardRoutes.use('*', requireAuth);
 
 dashboardRoutes.get('/stats', requirePermission('dailySheets', 'view'), async (c) => {
   const db = c.get('db');
+  const etag = dashboardCacheEtag(await readCacheVersion(db, CACHE_NAMESPACES.dashboard));
+  if (ifNoneMatchSatisfied(c.req.header('If-None-Match'), etag)) {
+    c.header('ETag', etag);
+    c.header('Cache-Control', 'private, no-cache');
+    return c.body(null, 304);
+  }
   const stats = await readVersionedCache(db, CACHE_NAMESPACES.dashboard, 'stats', async () => {
   const openOnly = eq(dailySheets.status, 'open');
   const latest = await db
@@ -69,5 +75,7 @@ dashboardRoutes.get('/stats', requirePermission('dailySheets', 'view'), async (c
       recentSheets: recent,
     };
   });
+  c.header('ETag', etag);
+  c.header('Cache-Control', 'private, no-cache');
   return c.json({ stats });
 });
