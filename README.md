@@ -1,8 +1,4 @@
-<p align="center">
-  <img src="docs/screenshots/login-light.png" alt="Nana Secret sales order login" width="720" />
-</p>
-
-<h1 align="center">Nana Secret · Sales Order</h1>
+<h1 align="center">Sales Order</h1>
 
 <p align="center">
   Arabic-first wholesale order desk for daily sheets, packaging-aware catalog, customers, reports, and governed operations.
