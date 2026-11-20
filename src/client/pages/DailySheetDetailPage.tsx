@@ -917,13 +917,18 @@ export function DailySheetDetailPage() {
 
       {editor && !editor.orderId && !locked && (
         <div
-          className="no-print fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/60 p-4 backdrop-blur-xs"
+          className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-xs sm:p-4"
           role="dialog"
           aria-modal="true"
           onClick={() => setEditor(null)}
         >
-          <div className="relative z-10 w-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
-            {renderEditor('إضافة طلب جديد')}
+          <div
+            className="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden [&_form>:first-child]:sticky [&_form>:first-child]:top-0 [&_form>:first-child]:z-10 [&_form>:first-child]:shrink-0 [&_form>:first-child]:bg-white dark:[&_form>:first-child]:bg-slate-900 [&_form>:last-child]:sticky [&_form>:last-child]:bottom-0 [&_form>:last-child]:z-10 [&_form>:last-child]:shrink-0 [&_form>:last-child]:bg-white dark:[&_form>:last-child]:bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {renderEditor('إضافة طلب جديد')}
+            </div>
           </div>
         </div>
       )}

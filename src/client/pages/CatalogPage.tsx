@@ -274,7 +274,7 @@ export function CatalogPage() {
       </section>
 
       <div className="no-print sticky top-16 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur-md sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 dark:border-slate-800 dark:bg-slate-900/90">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
           <div className="relative w-52 shrink-0">
             <Search className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
@@ -285,7 +285,7 @@ export function CatalogPage() {
               className="h-9 w-full rounded-lg border border-slate-300 bg-white pr-9 pl-3 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
           </div>
-          <div className="inline-flex shrink-0 flex-nowrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 dark:border-slate-700 dark:bg-slate-950">
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 dark:border-slate-700 dark:bg-slate-950">
             <button type="button" onClick={() => setItemType('')} className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-bold ${itemType === '' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'}`}>الكل</button>
             {ITEM_TYPES.map((type) => (
               <button key={type} type="button" onClick={() => setItemType(type)} className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-bold ${itemType === type ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'}`}>{ITEM_TYPE_LABELS_AR[type]}</button>
@@ -328,7 +328,7 @@ export function CatalogPage() {
             ))}
           </select>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
           {canManage && (
             <button
               type="button"
@@ -418,7 +418,7 @@ export function CatalogPage() {
                   <div key={product.id} className="grid grid-cols-12 items-center gap-3 px-4 py-2.5 hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
                     <div className="col-span-12 flex min-w-0 items-center gap-2.5 sm:col-span-5">
                       <span dir="ltr" className="rounded bg-blue-600 px-2 py-0.5 font-mono text-xs font-bold text-white">{product.code}</span>
-                      <span className="truncate text-sm font-bold text-slate-900 dark:text-white">{product.name}</span>
+                      <span className="min-w-0 whitespace-normal break-words text-sm font-bold text-slate-900 dark:text-white">{product.name}</span>
                     </div>
                     <div className="col-span-12 flex flex-wrap items-center gap-4 text-xs tabular-nums sm:col-span-5 sm:text-sm">
                       <span className="inline-flex w-16 items-center gap-1.5 text-slate-600 dark:text-slate-300">
@@ -466,13 +466,13 @@ export function CatalogPage() {
 
       <BulkImportModal open={importOpen} mode="products" products={products} customers={[]} onClose={() => setImportOpen(false)} onImported={loadProducts} />
       {modalOpen && !editing && (
-        <div className="no-print fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/60 p-4 backdrop-blur-xs" role="dialog" aria-modal="true" onClick={() => !isSaving && setModalOpen(false)}>
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-xs sm:p-4" role="dialog" aria-modal="true" onClick={() => !isSaving && setModalOpen(false)}>
           <form
             onSubmit={submitForm}
             onClick={(event) => event.stopPropagation()}
-            className="relative z-10 w-full max-w-lg rounded-lg border border-slate-200 border-r-4 border-r-blue-600 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+            className="relative z-10 flex max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-slate-200 border-r-4 border-r-blue-600 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
           >
-            <div className="mb-4 flex items-start justify-between gap-3">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 dark:border-slate-800">
               <div>
                 <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
                   إضافة منتج جديد
@@ -485,6 +485,7 @@ export function CatalogPage() {
                 <X className="h-5 w-5" />
               </button>
             </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
             {formError && (
               <p role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
                 {formError}
@@ -542,7 +543,8 @@ export function CatalogPage() {
               الصنف نشط ومتاح في الأوردرات
               <input type="checkbox" checked={form.isActive} onChange={(event) => setForm((prev) => ({ ...prev, isActive: event.target.checked }))} className="h-4 w-4 accent-blue-600" />
             </label>
-            <div className="mt-5 flex justify-end gap-2.5">
+            </div>
+            <div className="flex shrink-0 justify-end gap-2.5 border-t border-slate-200 px-4 py-4 dark:border-slate-800">
               <button type="button" onClick={() => setModalOpen(false)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white">
                 إلغاء
               </button>

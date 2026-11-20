@@ -222,6 +222,7 @@ export function DailySheetsPage() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-2xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="overflow-x-auto">
         <table className="w-full border-collapse text-right text-sm">
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
@@ -271,6 +272,7 @@ export function DailySheetsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       <Pagination page={page} pageSize={20} total={total} onPage={setPage} />

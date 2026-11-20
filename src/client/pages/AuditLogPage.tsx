@@ -147,7 +147,7 @@ export function AuditLogPage() {
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
         <div className="overflow-x-auto">
-          <table className="min-w-full text-right text-sm">
+          <table className="min-w-[720px] text-right text-sm">
             <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-950 dark:text-slate-400">
               <tr>
                 <th className="px-3 py-2 font-bold">الوقت</th>
@@ -173,10 +173,10 @@ export function AuditLogPage() {
                       <td className="px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100">{row.actorFullName}<div className="font-medium text-slate-500" dir="ltr">@{row.actorUsername}</div></td>
                       <td className="px-3 py-2 text-xs">{auditModuleLabel(row.module)}</td>
                       <td className="px-3 py-2 text-xs font-bold">{auditActionLabel(row.action)}</td>
-                      <td className="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{row.summary}</td>
+                      <td className="min-w-[220px] px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{row.summary}</td>
                       <td className="px-3 py-2">
                         {(details.length > 0 || row.ipAddress) && (
-                          <button type="button" onClick={() => setOpenId(open ? null : row.id)} className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500 dark:text-slate-300">
+                          <button type="button" onClick={() => setOpenId(open ? null : row.id)} className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-bold text-slate-500 dark:text-slate-300">
                             <ChevronDown className={`h-3.5 w-3.5 ${open ? 'rotate-180' : ''}`} />تفاصيل
                           </button>
                         )}

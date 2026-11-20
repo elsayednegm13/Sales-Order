@@ -383,7 +383,7 @@ export function UsersPage() {
       {/* Users Data Table */}
       <div className="overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-2xs dark:border-slate-800 dark:bg-slate-900">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-right text-sm">
+          <table className="w-full min-w-[680px] border-collapse text-right text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/90 text-xs font-bold text-slate-600 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
                 <th className="px-5 py-3.5">المستخدم</th>
@@ -442,9 +442,9 @@ export function UsersPage() {
                       key={u.id}
                       className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-900/40"
                     >
-                      <td className="px-5 py-3.5">
+                      <td className="min-w-[180px] px-5 py-3.5">
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900 dark:text-slate-100">
+                          <span className="min-w-0 whitespace-normal break-words font-bold text-slate-900 dark:text-slate-100">
                             {u.fullName}
                           </span>
                           {isSelf && (
@@ -496,10 +496,10 @@ export function UsersPage() {
                               {grantedCount} من {TOTAL_PERMISSION_FLAGS} صلاحية
                             </span>
                             {customized && (
-                              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">مخصّص</span>
+                              <span className="whitespace-nowrap rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">مخصّص</span>
                             )}
                             {sensitiveCount > 0 && (
-                              <span className="rounded-md bg-red-100 px-2 py-0.5 text-[11px] font-bold text-red-800 dark:bg-red-950 dark:text-red-200">{sensitiveCount} حساسة</span>
+                              <span className="whitespace-nowrap rounded-md bg-red-100 px-2 py-0.5 text-[11px] font-bold text-red-800 dark:bg-red-950 dark:text-red-200">{sensitiveCount} حساسة</span>
                             )}
                           </span>
                         )}
